@@ -106,6 +106,7 @@ class Runner_PISA:
         if snap_idx == 0 and step_flag == 1:
             model.load_model(f'{model.model_path}_forward_snap0')
             model.save_model(add_path='_snap0')
+            self.write_results(model, args, corpus, snap_idx, option='')
             return 
         if snap_idx > 0 and 'finetune' in args.dyn_method:
             model.load_model(f'{model.model_path}_snap{snap_idx-1}')
