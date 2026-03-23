@@ -63,6 +63,7 @@ class Reader(object):
         self.dataset_size = len(self.data_df)
         self.n_batches = math.ceil(self.dataset_size/self.batch_size)
         logging.info('"# user": {}, "# item": {}, "# entry": {}'.format(self.n_users, self.n_items, self.dataset_size))
+        print(       '"# user": {}, "# item": {}, "# entry": {}'.format(self.n_users, self.n_items, self.dataset_size))
         #self.path = os.path.join(self.prefix, self.dataset, self.suffix, self.s_fname)
         self.path = os.path.join(self.prefix, self.dataset, self.suffix, self.s_fname)
         if not os.path.exists(self.path):
@@ -158,7 +159,11 @@ class Reader(object):
                 finetune_train = snapshot_train
             else:
                 gap = self.snap_boundaries[idx] - self.snap_boundaries[idx-1]
-                finetune_train = self.data_df[(snap_boundary - gap):(snap_boundary)].values.astype(np.int64)
+                # finetune_train = self.data_df[(snap_boundary - gap):(snap_boundary)].values.astype(np.int64)
+                finetune_df_slice = self.data_df.iloc[(snap_boundary - gap):snap_boundary]
+                intercnt, usercnt, itemcnt = len(finetune_df_slice), finetune_df_slice['user_id'].nunique(), finetune_df_slice['item_id'].nunique()
+                print("Incre block {} - #inter: {}, # user: {}, # item: {}, # density {}".format(idx, intercnt, usercnt, itemcnt, intercnt/(usercnt*itemcnt) ))
+                finetune_train = finetune_df_slice.values.astype(np.int64)
             utils.write_interactions_to_file(os.path.join(self.snapshots_path, 'incre_block'+str(idx)), finetune_train)
 
             # validation and test set

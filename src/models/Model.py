@@ -58,7 +58,7 @@ class Model(torch.nn.Module):
 
         return pred_eval.cpu().data.numpy()
 
-    def loss(self, current_data, reduction):
+    def loss(self, current_data, reduction, gitf_w=None):
         all_users, all_items = self.computer()
         u_ids = current_data['user_id'].repeat((1, current_data['item_id'].shape[1])).to(torch.long)
         i_ids = current_data['item_id'].to(torch.long)
@@ -67,6 +67,9 @@ class Model(torch.nn.Module):
         predictions = (u_vectors * i_vectors).sum(dim=-1)
 
         pos_pred, neg_pred = predictions[:, 0], predictions[:, 1:1 + self.num_neg]  # 1 pos : self.num_neg neg
+        if gitf_w is not None:
+            pos_pred *= gitf_w #(bs,)
+            neg_pred *= gitf_w.unsqueeze(1) #(bs,num_neg)
         # BPR loss
         bpr_loss = -(pos_pred[:, None] - neg_pred).sigmoid().log().mean(dim=1)
         if reduction == 'mean':

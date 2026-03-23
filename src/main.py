@@ -94,8 +94,8 @@ def main():
     logging.info('Snap boundaries: {}'.format(corpus.snap_boundaries + [corpus.dataset_size]))
 
     # Run model 
-    runner = runner_name(args, corpus)
-    data_dict = dict()
+    runner = runner_name(args, corpus) # autually trainer
+    # data_dict = dict()
 
     # full-retraining   
     #utils.fix_seed(args.random_seed)
@@ -137,7 +137,7 @@ def main():
                 shutil.copy(args.pretrain_model_path+'_snap0', args.model_path+'_snap0')
 
 
-        if idx > 0:
+        if idx > 0 and args.model_name != "LGN":
             prev_data = Dataloader.Dataset(args, corpus, 'hist', idx-1)
 
         if 'plasticity' in args.dyn_method:

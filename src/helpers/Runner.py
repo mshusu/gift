@@ -42,6 +42,11 @@ class Runner(object):
                             help='pin_memory in DataLoader')
         parser.add_argument('--test_result_file', type=str, default='',
                             help='')
+        
+        # for global info-content training framework (gitf)
+        parser.add_argument("--strefreq_alpha", type=float, default=0.01)
+        parser.add_argument("--strefreq_steplowerbound", type=float, default=-1) # 2.71828
+        parser.add_argument("--strefreq_stepupperbound", type=float, default=-1) # 1096
 
         return parser
 
@@ -62,6 +67,16 @@ class Runner(object):
         self.test_result_file = args.test_result_file
         self.tepoch = args.tepoch
 
+        # for global info-content training framework (gitf)
+        self.stream_frequency = None
+        if 'globalinfocontent' in args.dyn_method:
+            from GITF_bstreamfreqencyV3  import bStreamFrequencyV3
+            self.stream_frequency = bStreamFrequencyV3(
+                corpus.n_items, 
+                args.strefreq_alpha, 
+                args.strefreq_steplowerbound, 
+                args.strefreq_stepupperbound,
+            )
 
 
     def _check_time(self, start=False):
@@ -107,6 +122,10 @@ class Runner(object):
               force_train):
         
         logging.info('Training time stage: {}'.format(snap_idx))
+
+        if self.stream_frequency:
+            logging.info('doing global info-content for stage: {}'.format(snap_idx))
+            self.stream_frequency.proc_newStreamDocs(data_dict.item_set)
 
         if model.optimizer is None:
             model.optimizer = self._build_optimizer(model)
@@ -243,7 +262,12 @@ class Runner(object):
         prediction = model(current['user_id'], current['item_id'])
         #u_ids, i_ids, prev_data, data, snap_idx,reduction='mean'
         #self, data, prev_data, snap_idx,reduction
-        total_loss = model.loss(current, reduction='mean')
+        if self.stream_frequency:
+            pos_items = current['item_id'][:,:1].squeeze(-1)
+            w = self.stream_frequency.get_minus_log_probability(pos_items)
+        else:
+            w = None
+        total_loss = model.loss(current, reduction='mean', gitf_w=w)
         # Update the recommender
         model.optimizer.zero_grad()
         total_loss.backward()

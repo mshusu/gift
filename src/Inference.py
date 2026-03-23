@@ -177,6 +177,7 @@ def Test(args, model, corpus, data_type, data_idx):
     test_file = os.path.join(corpus.snapshots_path, data_type+'_block'+str(data_idx))
     test_data = utils.read_data_from_file_int(test_file)
     test_data = np.array(test_data)
+    print(f'{data_type} data shape', test_data.shape)
     test_data = test_data
     test_pos_items = {}
     for user, item in test_data:
