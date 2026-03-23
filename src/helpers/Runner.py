@@ -143,7 +143,7 @@ class Runner(object):
             logging.info('Time_idx {} model already exists. Skip training and test directly.'.format(snap_idx))
             model.load_model(model.model_path+'_snap{}'.format(snap_idx))
             self.write_results(model, args, corpus, snap_idx)
-            self.write_results_for_different_user_group(model, args, corpus, snap_idx)
+            #self.write_results_for_different_user_group(model, args, corpus, snap_idx)
 
             return 0, 0
         
