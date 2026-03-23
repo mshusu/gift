@@ -104,7 +104,7 @@ class Runner_PISA:
                    1 -> for PISA training -> model path suffix _snap{snap_idx}
         """
         if snap_idx == 0 and step_flag == 1:
-            model.load_model(f'{model.model_path}_s_forward_snap0')
+            model.load_model(f'{model.model_path}_forward_snap0')
             model.save_model(add_path='_snap0')
             return 
         if snap_idx > 0 and 'finetune' in args.dyn_method:
