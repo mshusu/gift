@@ -16,15 +16,16 @@ class bStreamFrequencyV3:
     def __init__(
                     self, doc_count, alpha, steplowerbound, stepupperbound#, resetflag
                 ):
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         with torch.no_grad():
-            self.step_gap = torch.zeros(doc_count, device='cuda')
+            self.step_gap = torch.zeros(doc_count, device=self.device)
             #self.step_gap = torch.full((doc_count,), 2.71828, device='cuda')
-            self.step_latest = torch.zeros(doc_count, device='cuda')
+            self.step_latest = torch.zeros(doc_count, device=self.device)
             #self.step_latest_flag = torch.zeros(doc_count, device='cuda', dtype=torch.bool)
             self.alpha = alpha
             self.steplowerbound = steplowerbound
             self.stepupperbound = stepupperbound
-            self.const_e = torch.exp(torch.tensor(1.0, device='cuda')) # 2.71828...
+            self.const_e = torch.exp(torch.tensor(1.0, device=self.device)) # 2.71828...
             self.global_t = 0
             #self.resetflagAcrEpoch = resetflag
     
@@ -36,7 +37,7 @@ class bStreamFrequencyV3:
             for d in mktbin_doc:
                 docidset.add(d)
         self.global_t += 1
-        self.add_streamIDsDeduped(torch.tensor(list(docidset), device='cuda'), self.global_t)
+        self.add_streamIDsDeduped(torch.tensor(list(docidset), device=self.device), self.global_t)
     
     # ids: tensor of deduped id list
     def add_streamIDsDeduped(self, ids, t): 
