@@ -211,7 +211,7 @@ class Runner(object):
             b = 0
 
             #if epoch >= 20 and (epoch+1) % 5 == 0:
-            if  (epoch) >= minimum and (epoch+1) % 2 == 0:
+            if  (epoch) >= minimum: # and (epoch+1) % 2 == 0:
                 v_results = Inference.Test(args, model, corpus, 'val', snap_idx)
                 Inference.print_results(None, v_results, None)
 
