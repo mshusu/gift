@@ -14,6 +14,7 @@ from models.general import LGN, PISA_LGN, Contrastive_LGN
 from models import Dataloader
 from utils import utils
 import pandas as pd
+import datetime
 
 def parse_global_args(parser):
     parser.add_argument('--gpu', type=str, default='0',
@@ -77,6 +78,7 @@ def test_file(args, corpus, test_type):
 
 def main():
     logging.info('-' * 45 + ' BEGIN: ' + utils.get_time() + ' ' + '-' * 45)
+    start_time = datetime.datetime.now()
 
     # Random seed
     utils.fix_seed(args.random_seed)
@@ -184,6 +186,8 @@ def main():
 
 
     logging.info(os.linesep + '-' * 45 + ' END: ' + utils.get_time() + ' ' + '-' * 45)
+    end_time = datetime.datetime.now()
+    print(f"Time duration for training & test: {end_time - start_time}")
 
 def post():
     return args.test_result_file
