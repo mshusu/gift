@@ -199,7 +199,7 @@ class Model(torch.nn.Module):
 
     def return_zero_losses(self, bpr_loss):
         zero_tensor = torch.tensor([0.0], dtype=torch.float32).to(self._device)
-        return bpr_loss, bpr_loss, zero_tensor, zero_tensor, zero_tensor, zero_tensor, zero_tensor, None
+        return bpr_loss, bpr_loss, zero_tensor, zero_tensor, zero_tensor, zero_tensor, zero_tensor
 
     def loss(self, data, batch_data, prev_data, time_idx, prev_model, reduction):
         all_users, all_items = self.computer()

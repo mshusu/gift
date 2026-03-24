@@ -210,7 +210,7 @@ class Runner_cons(object):
                 exit()
 
             # Validation and early stopping
-            if epoch >= 0 and (epoch + 1) % 2 == 0:
+            if epoch >= 0: # and (epoch + 1) % 2 == 0:
                 v_results = Inference.Test(args, model, corpus, 'val', snap_idx)
                 if v_results[0][0] > best_recall:
                     best_epoch = epoch + 1
