@@ -239,7 +239,7 @@ class Runner_cons(object):
 
     def fit(self, model, data, prev_data, snap_idx, shuffle, prev_model):
 
-        if 'piw' in self.dyn_method:
+        if 'piw' in self.dyn_method and snap_idx > 0:
             with torch.no_grad():
                 model.update_kmeans(prev_model)
 
