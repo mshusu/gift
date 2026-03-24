@@ -65,8 +65,8 @@ def test_file(args, corpus, test_type):
     
     # last several incre blocks metrics
     incre_total = len(next(iter(d.values())))
-    latest, lfname = [5], ['mean-']
-    for rr in [0.1, 0,2, 0.5]:
+    latest, lfname = [5], ['mean-5']
+    for rr in [0.1, 0.2, 0.5]:
         latest.append( int(incre_total * rr) )
         lfname.append(f'mean-{rr}')
     
