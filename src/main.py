@@ -62,6 +62,19 @@ def test_file(args, corpus, test_type):
             for v_ in v:
                 f.writelines('\t{:.4f}'.format(v_))
             f.writelines('\n')
+    
+    # last several incre blocks metrics
+    incre_total = len(next(iter(d.values())))
+    latest, lfname = [5], ['mean-']
+    for rr in [0.1, 0,2, 0.5]:
+        latest.append( int(incre_total * rr) )
+        lfname.append(f'mean-{rr}')
+    
+    for k, v in d.items():
+        for la, fn in zip(latest, lfname):
+            with open(os.path.join(args.test_result_file, '_{}_{}'.format(test_type, fn)), 'w+') as f:
+                v = v[-la:]
+                f.writelines('{}\t{:.4f}\n'.format(k, sum(v)/len(v)))
 
 def main():
     logging.info('-' * 45 + ' BEGIN: ' + utils.get_time() + ' ' + '-' * 45)
