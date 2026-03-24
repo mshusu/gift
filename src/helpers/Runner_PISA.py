@@ -140,7 +140,9 @@ class Runner_PISA:
                 exit()
 
             # Validation and early stopping
-            if epoch >= 0 and (epoch + 1) % 2 == 0:
+            eval_step = 1           # pisa default value 2
+            patience_start_step = 0 # pisa default value 20
+            if epoch >= 0 and (epoch + 1) % eval_step == 0:
                 v_results = Inference.Test(args, model, corpus, 'val', snap_idx)
                 if v_results[0][0] > best_recall:
                     best_epoch = epoch + 1
@@ -148,7 +150,7 @@ class Runner_PISA:
                     save_path = f'_forward_snap{snap_idx}' if (step_flag == 0 and 'plasticity' in self.dyn_method) else f'_snap{snap_idx}'
                     model.save_model(add_path=save_path)
 
-                if epoch + 1 > 20:
+                if epoch + 1 > patience_start_step:
                     if v_results[0][0] < best_recall:
                         cnt += 1
                     else:
