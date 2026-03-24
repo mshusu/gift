@@ -30,7 +30,7 @@ class Dataset(BaseDataset):
 
         self.trainUser = self.train_data[:, 0]
         self.trainItem = self.train_data[:, 1]
-        self.UserItemNet = csr_matrix((np.ones(len(self.trainUser)), (self.trainUser, self.trainItem)),
+        self.UserItemNet = csr_matrix((np.ones(len(self.trainUser), dtype=np.float32), (self.trainUser, self.trainItem)),
 									shape=(corpus.n_users, corpus.n_items))    
         self.Graph = None
 
@@ -45,6 +45,9 @@ class Dataset(BaseDataset):
         for user in self.user_set:
             self.user_neigh[user] = list(self.UserItemNet[user].indices)
 
+        # for contrastive
+        self.ItemUserNet = self.UserItemNet.T.tocsr()
+        self.item_neigh = {item: list(self.ItemUserNet[item].indices) for item in self.item_set}
         
         # get neighbor set for each item
         # self.item_neigh = {}
