@@ -69,10 +69,9 @@ def test_file(args, corpus, test_type):
     for rr in [0.1, 0.2, 0.5]:
         latest.append( int(incre_total * rr) )
         lfname.append(f'mean-{rr}')
-    
-    for k, v in d.items():
-        for la, fn in zip(latest, lfname):
-            with open(os.path.join(args.test_result_file, '_{}_{}'.format(test_type, fn)), 'w+') as f:
+    for la, fn in zip(latest, lfname):
+        with open(os.path.join(args.test_result_file, '_{}_{}'.format(test_type, fn)), 'w+') as f:
+            for k, v in d.items():
                 v = v[-la:]
                 f.writelines('{}\t{:.4f}\n'.format(k, sum(v)/len(v)))
 
