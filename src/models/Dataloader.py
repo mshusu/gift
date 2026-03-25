@@ -48,6 +48,14 @@ class Dataset(BaseDataset):
         # for contrastive
         self.ItemUserNet = self.UserItemNet.T.tocsr()
         self.item_neigh = {item: list(self.ItemUserNet[item].indices) for item in self.item_set}
+
+        # specially for neg sample
+        hist_file = os.path.join(corpus.snapshots_path, 'hist_block'+str(data_idx))
+        hist_data = np.array(utils.read_data_from_file_int(hist_file))
+        histUser, histItem = hist_data[:, 0], hist_data[:, 1]
+        self.hist_UserItemNet = csr_matrix((np.ones(len(hist_data), dtype=np.float32), (histUser, histItem)),
+									        shape=(corpus.n_users, corpus.n_items))
+        self.hist_unique_items = np.array(list(set(histItem)))   
         
         # get neighbor set for each item
         # self.item_neigh = {}
@@ -88,7 +96,8 @@ class Dataset(BaseDataset):
         #for idx, user in enumerate(self.corpus.user_list[index:index_end]): # Automatic coverage?
         #for idx, user in enumerate(user_id): # Automatic coverage?
 
-        user_clicked_set = copy.deepcopy(self.corpus.user_clicked_set[user_id])
+        # user_clicked_set = copy.deepcopy(self.corpus.user_clicked_set[user_id])
+        user_clicked_set = set(self.hist_UserItemNet[user_id].indices)
         # By copying, it may not collide with other process with same user index
         for neg in range(num_neg):
             neg_item = self._randint_w_exclude(user_clicked_set)
@@ -99,7 +108,9 @@ class Dataset(BaseDataset):
         return neg_items
 
     def _randint_w_exclude(self, clicked_set):
-        randItem = randint(1, self.corpus.n_items-1)
+        #randItem = randint(1, self.corpus.n_items-1)
+        r = randint(0, len(self.hist_unique_items) - 1)
+        randItem = self.hist_unique_items[r]
         return self._randint_w_exclude(clicked_set) if randItem in clicked_set else randItem
     
 
