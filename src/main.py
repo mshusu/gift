@@ -36,6 +36,9 @@ def parse_global_args(parser):
     parser.add_argument('--dyn_update', type=int, default=0,
                         help='dynamic update strategy.')
     parser.add_argument('--t_opt', type=int, default=5,)
+
+    parser.add_argument('--force_train', action='store_true', help='when the param occurs, \
+                        train model from scratch instead of reusing exsited model of file')
     return parser
 
 def test_file(args, corpus, test_type):
@@ -124,7 +127,7 @@ def main():
     best_epoch_d = {}
     prev_data=[]
 
-    force_train = False
+    force_train = args.force_train # False
 
     for idx in range(corpus.n_snapshots):
         data_dict = Dataloader.Dataset(args, corpus, data_type, idx)
