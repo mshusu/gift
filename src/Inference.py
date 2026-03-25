@@ -293,7 +293,7 @@ def Test_excl_cold(args, model, test_loads, hist_loads):
                 continue
 
             user_id = torch.tensor(target_users, dtype=torch.int64).to(model._device)
-            item_id = torch.tensor(np.arange(hist_unique_items), dtype=torch.int64).to(model._device)
+            item_id = torch.tensor(np.arange(len(hist_unique_items)), dtype=torch.int64).to(model._device)
 
             scores = model.infer_user_scores(user_id, item_id)
             scores = scores.cpu().numpy()
