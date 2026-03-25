@@ -95,8 +95,8 @@ class Runner(object):
 
 
     def write_results_excl_cold(self, model, args, snap_idx, test_loads, val_loads, hist_loads):
-        v_results = Inference.Test(args, model, test_loads, hist_loads)
-        t_results = Inference.Test(args, model, val_loads, hist_loads)
+        v_results = Inference.Test_excl_cold(args, model, test_loads, hist_loads)
+        t_results = Inference.Test_excl_cold(args, model, val_loads, hist_loads)
         logging.info("Trained model testing")
 
         val_str = Inference.print_results(None, v_results, None)
