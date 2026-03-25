@@ -93,7 +93,25 @@ class Runner(object):
         return torch.optim.Adam(model.parameters(), lr=self.learning_rate, weight_decay=self.l2)
 
 
-        
+
+    def write_results_excl_cold(self, model, args, snap_idx, test_loads, val_loads, hist_loads):
+        v_results = Inference.Test(args, model, test_loads, hist_loads)
+        t_results = Inference.Test(args, model, val_loads, hist_loads)
+        logging.info("Trained model testing")
+
+        val_str = Inference.print_results(None, v_results, None)
+        val_result_filename_ = os.path.join(self.test_result_file, 'val_snap{}.txt'.format(snap_idx))
+        open(val_result_filename_, 'w+').write(val_str)
+        test_str = Inference.print_results(None, None, t_results)
+        result_filename_ = os.path.join(self.test_result_file, 'test_snap{}.txt'.format(snap_idx))
+        open(result_filename_, 'w+').write(test_str)
+
+        ### save the test results to a json file for later analysis ###
+        Ks = [10,20,50,100]
+        json_t = {f'{metric}@{k}': v for metric, v in zip(['Recall', 'NDCG', 'MRR', 'Precision'], t_results) for k, v in zip(Ks, v)}
+        with open (os.path.join(self.test_result_file, 'test_snap{}.json'.format(snap_idx)), 'w') as f:
+            json.dump(json_t, f, indent=4)
+
     def write_results(self, model, args, corpus, snap_idx):
         v_results = Inference.Test(args, model, corpus, 'val', snap_idx)
         t_results = Inference.Test(args, model, corpus, 'test', snap_idx)
@@ -130,19 +148,24 @@ class Runner(object):
         if model.optimizer is None:
             model.optimizer = self._build_optimizer(model)
 
+        test_loads = utils.load_data_as_csr(corpus, 'test', snap_idx)
+        val_loads  = utils.load_data_as_csr(corpus, 'val', snap_idx)
+        hist_loads = utils.load_data_as_csr(corpus, 'hist', snap_idx)
         
         if snap_idx == 0 and os.path.exists(model.model_path+'_snap{}'.format(0)) and force_train == False:
             logging.info('Time_idx {} model already exists. Skip training and test directly.'.format(snap_idx))
             # test the model
             model.load_model(model.model_path+'_snap{}'.format(snap_idx))
-            self.write_results(model, args, corpus, snap_idx)
+            #self.write_results(model, args, corpus, snap_idx)
+            self.write_results_excl_cold(model, args, snap_idx, test_loads, val_loads, hist_loads)
             return 0, 0
         
         ### assuming existing models are properly trained ###
         elif os.path.exists(model.model_path+'_snap{}'.format(snap_idx)) and force_train == False:
             logging.info('Time_idx {} model already exists. Skip training and test directly.'.format(snap_idx))
             model.load_model(model.model_path+'_snap{}'.format(snap_idx))
-            self.write_results(model, args, corpus, snap_idx)
+            #self.write_results(model, args, corpus, snap_idx)
+            self.write_results_excl_cold(model, args, snap_idx, test_loads, val_loads, hist_loads)
             #self.write_results_for_different_user_group(model, args, corpus, snap_idx)
 
             return 0, 0
@@ -152,7 +175,8 @@ class Runner(object):
             if snap_idx > 0 and 'pretrain' in args.dyn_method:
                 logging.info('Time_idx {} model already exists. Skip training and test directly.'.format(snap_idx))
                 model.load_model(model.model_path+'_snap0')
-                self.write_results(model, args, corpus, snap_idx)
+                #self.write_results(model, args, corpus, snap_idx)
+                self.write_results_excl_cold(model, args, snap_idx, test_loads, val_loads, hist_loads)
                 return 0, 0
             else:
                 logging.info('Time_idx {} model does not exist. Start training.'.format(snap_idx))
@@ -214,7 +238,8 @@ class Runner(object):
             eval_step = 1           # pisa default value 2
             patience_start_step = 0 # pisa default value 20
             if  (epoch) >= minimum and (epoch+1) % eval_step == 0:
-                v_results = Inference.Test(args, model, corpus, 'val', snap_idx)
+                #v_results = Inference.Test(args, model, corpus, 'val', snap_idx)
+                v_results = Inference.Test_excl_cold(args, model, val_loads, hist_loads)
                 Inference.print_results(None, v_results, None)
 
                 if v_results[a][b] > best_recall:
@@ -234,7 +259,8 @@ class Runner(object):
         
         logging.info("End train and valid. Best validation epoch is {:03d}.".format(best_epoch))
         model.load_model(model.model_path+'_snap{}'.format(snap_idx))
-        self.write_results(model, args, corpus, snap_idx)
+        #self.write_results(model, args, corpus, snap_idx)
+        self.write_results_excl_cold(model, args, snap_idx, test_loads, val_loads, hist_loads)
 
         return self.time[1] - self.time[0], best_epoch
 

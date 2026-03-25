@@ -4,6 +4,7 @@ import torch
 import datetime
 import numpy as np
 import random
+from scipy.sparse import csr_matrix
 
 
 def read_data_from_file(filename, flag=0):
@@ -89,4 +90,12 @@ def fix_seed(seed: int):
 def get_time():
     return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+def load_data_as_csr(corpus, data_type, data_idx):
+    pth = os.path.join(corpus.snapshots_path, data_type+'_block'+str(data_idx))
+    dat = np.array(read_data_from_file_int(pth))
+    users, items = dat[:, 0], dat[:, 1]
+    user_item_csr = csr_matrix((np.ones(len(dat), dtype=np.float32), (users, items)),
+                                        shape=(corpus.n_users, corpus.n_items))
+    unique_items = np.array(list(set(items)))
+    return  user_item_csr, users, unique_items
 

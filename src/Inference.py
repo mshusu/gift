@@ -167,6 +167,7 @@ def Test_group(args, model, corpus, data_type, data_idx, group_files):
     return group_results
 
 
+# inference incl. cold user & cold item, their embedding are random.
 def Test(args, model, corpus, data_type, data_idx):
     batch_size = args.batch_size
     model.eval()
@@ -250,6 +251,74 @@ def Test(args, model, corpus, data_type, data_idx):
 
         # results = [recall, NDCG, MRR, precision]
         # string_results = {f'{metric}@{K}': v for metric, v in zip(['Recall', 'NDCG', 'MRR', 'Precision'], results) for K, v in zip(Ks, v)}
+
+        return recall, NDCG, MRR, precision
+
+
+# inference excl. cold user & cold item
+def Test_excl_cold(args, model, test_loads, hist_loads):
+    batch_size = args.batch_size
+    model.eval()
+
+    test_user_item_csr, testUsers, _ = test_loads
+
+    hist_user_item_csr, hist_users, hist_unique_items = hist_loads
+
+    Ks = [10,20,50,100]
+    max_K = max(Ks)
+
+    users_list = []
+    rating_list = []
+    ground_truth_list = []
+
+    with torch.no_grad():
+        n_batch = len(testUsers) // batch_size
+        if len(testUsers) % batch_size != 0:
+            n_batch += 1
+        
+        for i in range(n_batch):
+            start = i * batch_size
+            end = min((i + 1) * batch_size, len(testUsers))
+            batch_users = testUsers[start:end]
+
+            target_users,  ground_truth = [], []
+            for user in batch_users:
+                # skip cold-start users
+                if user in hist_users:
+                    target_users.append(user)
+                    ground_truth.append(test_user_item_csr[user].indices.tolist())
+            
+            if len(target_users) == 0:
+                n_batch -= 1
+                continue
+
+            user_id = torch.tensor(target_users, dtype=torch.int64).to(model._device)
+            item_id = torch.tensor(np.arange(hist_unique_items), dtype=torch.int64).to(model._device)
+
+            scores = model.infer_user_scores(user_id, item_id)
+            scores = scores.cpu().numpy()
+
+            # mask clicked
+            max_item_id = hist_unique_items.max()
+            lookup_table = np.full(max_item_id + 1, -1, dtype=np.int32)
+            lookup_table[hist_unique_items] = np.arange(len(hist_unique_items))
+            # mask logic
+            for i, user_id in enumerate(target_users):
+                clicked_raw = hist_user_item_csr[user_id].indices
+                mapped_indices = lookup_table[clicked_raw]
+                final_mask = mapped_indices[mapped_indices != -1]
+                if len(final_mask) > 0:
+                    scores[i, final_mask] = -float('inf')
+
+            _, rating_K = torch.topk(torch.tensor(scores), k=max_K)
+            
+            users_list.append(batch_users)
+            rating_list.extend(rating_K.cpu())
+            ground_truth_list.extend(ground_truth)
+        
+        assert n_batch == len(users_list)
+        
+        recall, NDCG, MRR, precision = computeTopNAccuracy(ground_truth_list, rating_list, Ks)
 
         return recall, NDCG, MRR, precision
 
