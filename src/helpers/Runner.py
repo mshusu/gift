@@ -148,9 +148,9 @@ class Runner(object):
         if model.optimizer is None:
             model.optimizer = self._build_optimizer(model)
 
-        test_loads = utils.load_data_as_csr(corpus, 'test', snap_idx)
-        val_loads  = utils.load_data_as_csr(corpus, 'val', snap_idx)
-        hist_loads = utils.load_data_as_csr(corpus, 'hist', snap_idx)
+        test_loads = utils.load_data_as_dict(corpus, 'test', snap_idx)
+        val_loads  = utils.load_data_as_dict(corpus, 'val', snap_idx)
+        hist_loads = utils.load_data_as_dict(corpus, 'hist', snap_idx)
         
         if snap_idx == 0 and os.path.exists(model.model_path+'_snap{}'.format(0)) and force_train == False:
             logging.info('Time_idx {} model already exists. Skip training and test directly.'.format(snap_idx))
@@ -273,7 +273,8 @@ class Runner(object):
         
         flag = 0
         for current in dl:
-            current = utils.batch_to_gpu(utils.squeeze_dict(current), model._device)
+            #current = utils.batch_to_gpu(utils.squeeze_dict(current), model._device)
+            current = utils.batch_to_gpu(current, model._device)
             current['batch_size'] = len(current['user_id'])
             prediction, total_loss = self.train_recommender_vanilla(dl,model, current, prev_data,snap_idx)
             flag = np.isnan(prediction).any()

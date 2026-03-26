@@ -260,9 +260,9 @@ def Test_excl_cold(args, model, test_loads, hist_loads):
     batch_size = args.batch_size
     model.eval()
 
-    test_user_item_csr, testUsers, _ = test_loads
+    test_user_clicked_list, testUsers, _ = test_loads
 
-    hist_user_item_csr, hist_users, hist_unique_items = hist_loads
+    hist_user_clicked_list, hist_users, hist_unique_items = hist_loads
 
     Ks = [10,20,50,100]
     max_K = max(Ks)
@@ -286,7 +286,7 @@ def Test_excl_cold(args, model, test_loads, hist_loads):
                 # skip cold-start users
                 if user in hist_users:
                     target_users.append(user)
-                    ground_truth.append(test_user_item_csr[user].indices.tolist())
+                    ground_truth.append(test_user_clicked_list[user])
             
             if len(target_users) == 0:
                 n_batch -= 1
@@ -304,7 +304,7 @@ def Test_excl_cold(args, model, test_loads, hist_loads):
             lookup_table[hist_unique_items] = np.arange(len(hist_unique_items))
             # mask logic
             for i, user_id in enumerate(target_users):
-                clicked_raw = hist_user_item_csr[user_id].indices
+                clicked_raw = hist_user_clicked_list[user_id]
                 mapped_indices = lookup_table[clicked_raw]
                 final_mask = mapped_indices[mapped_indices != -1]
                 if len(final_mask) > 0:

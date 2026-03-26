@@ -50,12 +50,11 @@ class Dataset(BaseDataset):
         self.item_neigh = {item: list(self.ItemUserNet[item].indices) for item in self.item_set}
 
         # specially for neg sample
-        hist_file = os.path.join(corpus.snapshots_path, 'hist_block'+str(data_idx))
-        hist_data = np.array(utils.read_data_from_file_int(hist_file))
-        histUser, histItem = hist_data[:, 0], hist_data[:, 1]
-        self.hist_UserItemNet = csr_matrix((np.ones(len(hist_data), dtype=np.float32), (histUser, histItem)),
-									        shape=(corpus.n_users, corpus.n_items))
-        self.hist_unique_items = np.array(list(set(histItem)))   
+        hist_user_clicked_list, _, hist_unique_items = utils.load_data_as_dict(corpus, 'hist', data_idx)
+        for user_id in hist_user_clicked_list:
+            hist_user_clicked_list[user_id] = set(hist_user_clicked_list[user_id])
+        hist_user_clicked_set = hist_user_clicked_list
+
         
         # get neighbor set for each item
         # self.item_neigh = {}
@@ -68,8 +67,8 @@ class Dataset(BaseDataset):
         return self.train_data.shape[0]
 
     def __getitem__(self, index: int) -> dict:
-        current = self._get_feed_dict(index)
-        #print('index: {}'.format(index))
+        #current = self._get_feed_dict(index)
+        current = self._get_feed_dict_fast(index)
         return current
 
     def _get_feed_dict(self, index: int) -> dict:
@@ -96,8 +95,7 @@ class Dataset(BaseDataset):
         #for idx, user in enumerate(self.corpus.user_list[index:index_end]): # Automatic coverage?
         #for idx, user in enumerate(user_id): # Automatic coverage?
 
-        # user_clicked_set = copy.deepcopy(self.corpus.user_clicked_set[user_id])
-        user_clicked_set = set(self.hist_UserItemNet[user_id].indices)
+        user_clicked_set = copy.deepcopy(self.corpus.user_clicked_set[user_id])
         # By copying, it may not collide with other process with same user index
         for neg in range(num_neg):
             neg_item = self._randint_w_exclude(user_clicked_set)
@@ -108,10 +106,36 @@ class Dataset(BaseDataset):
         return neg_items
 
     def _randint_w_exclude(self, clicked_set):
-        #randItem = randint(1, self.corpus.n_items-1)
-        r = randint(0, len(self.hist_unique_items) - 1)
-        randItem = self.hist_unique_items[r]
+        randItem = randint(1, self.corpus.n_items-1)
         return self._randint_w_exclude(clicked_set) if randItem in clicked_set else randItem
+    
+
+    def _get_feed_dict_fast(self, index: int) -> dict:
+        user_id, item_id = self.train_data[index]
+        neg_items = self._sample_neg_items_fast(user_id)
+        feed_dict = {
+            'user_id': user_id,     # single
+            'item_id': torch.cat([torch.tensor([item_id]), neg_items])
+        }
+        return feed_dict
+    
+    def _sample_neg_items_fast(self, user_id):
+        num_neg = self.args.num_neg
+        clicked_set = self.hist_user_clicked_set[user_id]
+        sample_pool = self.hist_unique_items
+        
+        neg_items = []
+        neg_set = set()
+        while len(neg_items) < num_neg:
+            samples = np.random.randint(0, len(sample_pool), size=num_neg * 2)
+            for idx in samples:
+                rand_item = sample_pool[idx]
+                if rand_item not in clicked_set and rand_item not in neg_set:
+                    neg_items.append(rand_item)
+                    neg_set.add(rand_item)
+                if len(neg_items) == num_neg:
+                    break
+        return torch.tensor(neg_items, dtype=torch.int64)
     
 
     # for GCN
@@ -146,22 +170,8 @@ class Dataset(BaseDataset):
             except :
                 print("generating adjacency matrix")
                 s = time()
-                adj_mat = sp.dok_matrix((self.corpus.n_users + self.corpus.n_items, self.corpus.n_users + self.corpus.n_items), dtype=np.float32)
-                adj_mat = adj_mat.tolil()
-                R = self.UserItemNet.tolil()
-                adj_mat[:self.corpus.n_users, self.corpus.n_users:] = R
-                adj_mat[self.corpus.n_users:, :self.corpus.n_users] = R.T
-                adj_mat = adj_mat.todok()
-                # adj_mat = adj_mat + sp.eye(adj_mat.shape[0])
-                
-                rowsum = np.array(adj_mat.sum(axis=1))
-                d_inv = np.power(rowsum, -0.5).flatten()
-                d_inv[np.isinf(d_inv)] = 0.
-                d_mat = sp.diags(d_inv)
-                
-                norm_adj = d_mat.dot(adj_mat)
-                norm_adj = norm_adj.dot(d_mat)
-                norm_adj = norm_adj.tocsr()
+                # norm_adj = self.get_norm_adj()
+                norm_adj = self.get_norm_adj_optimized()
                 end = time()
                 print(f"computing time {end-s}s, save norm_mat..")
                 sp.save_npz(adj_mat_path, norm_adj)
@@ -174,3 +184,78 @@ class Dataset(BaseDataset):
             self.Graph = self.Graph.coalesce().to(self._device)
                 #print("don't split the matrix")
         return self.Graph
+    
+    def get_norm_adj(self):
+        adj_mat = sp.dok_matrix((self.corpus.n_users + self.corpus.n_items, self.corpus.n_users + self.corpus.n_items), dtype=np.float32)
+        adj_mat = adj_mat.tolil()
+        R = self.UserItemNet.tolil()
+        adj_mat[:self.corpus.n_users, self.corpus.n_users:] = R
+        adj_mat[self.corpus.n_users:, :self.corpus.n_users] = R.T
+        adj_mat = adj_mat.todok()
+        # adj_mat = adj_mat + sp.eye(adj_mat.shape[0])
+        
+        rowsum = np.array(adj_mat.sum(axis=1))
+        d_inv = np.power(rowsum, -0.5).flatten()
+        d_inv[np.isinf(d_inv)] = 0.
+        d_mat = sp.diags(d_inv)
+        
+        norm_adj = d_mat.dot(adj_mat)
+        norm_adj = norm_adj.dot(d_mat)
+        norm_adj = norm_adj.tocsr()
+        return norm_adj
+
+    def get_norm_adj_optimized(self):
+        """
+        Optimized generation of the normalized adjacency matrix for GNN-based recommendation.
+        Uses direct COO coordinate construction to build the bipartite graph structure:
+        Matrix A = [[0, R], [R.T, 0]]
+        """
+        n_users = self.corpus.n_users
+        n_items = self.corpus.n_items
+        
+        # 1. Directly obtain COO coordinates from the User-Item interaction matrix (R)
+        # R shape is assumed to be (n_users, n_items)
+        R_coo = self.UserItemNet.tocoo()
+        
+        # 2. Construct coordinates for the symmetric bipartite graph
+        # Top-right block (0, R): row indices remain same, column indices shift by n_users
+        row_upper = R_coo.row
+        col_upper = R_coo.col + n_users
+        
+        # Bottom-left block (R.T, 0): row indices shift by n_users, column indices from R's original rows
+        row_lower = R_coo.col + n_users
+        col_lower = R_coo.row
+        
+        # Concatenate all coordinates and data to form the full adjacency information
+        rows = np.concatenate([row_upper, row_lower])
+        cols = np.concatenate([col_upper, col_lower])
+        data = np.concatenate([R_coo.data, R_coo.data])
+        
+        # 3. Construct the large adjacency matrix using COO format for efficiency
+        adj_mat = sp.coo_matrix((data, (rows, cols)), 
+                                shape=(n_users + n_items, n_users + n_items))
+        
+        # 4. Normalization process: Symmetric normalization D^-0.5 * A * D^-0.5
+        # Convert to CSR format for significantly faster row-sum and matrix operations
+        adj_mat = adj_mat.tocsr() 
+        rowsum = np.array(adj_mat.sum(axis=1)).flatten()
+        
+        # Calculate the inverse square root of degrees, handling division by zero for isolated nodes
+        d_inv_sqrt = np.power(rowsum, -0.5)
+        d_inv_sqrt[np.isinf(d_inv_sqrt)] = 0.
+        
+        """ 
+        # inefficient, memory-consuming
+        # Compute the normalized matrix: norm_adj = D^-0.5 * A * D^-0.5
+        d_mat = sp.diags(d_inv_sqrt)
+        norm_adj = d_mat.dot(adj_mat).dot(d_mat)
+        return norm_adj.tocsr() 
+        """
+
+        A = adj_mat
+        data, indices, indptr = A.data, A.indices, A.indptr
+        # Normilze：A[i, j] = d_inv_sqrt[i] * A[i, j] * d_inv_sqrt[j]
+        for i in range(A.shape[0]):
+            start, end = indptr[i], indptr[i+1]
+            data[start:end] = data[start:end] * d_inv_sqrt[i] * d_inv_sqrt[indices[start:end]]
+        return adj_mat

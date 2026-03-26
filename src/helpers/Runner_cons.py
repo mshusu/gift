@@ -253,7 +253,8 @@ class Runner_cons(object):
 
         total_losses = []
         for current in dl:
-            current = utils.batch_to_gpu(utils.squeeze_dict(current), model._device)
+            #current = utils.batch_to_gpu(utils.squeeze_dict(current), model._device)
+            current = utils.batch_to_gpu(current, model._device)
             current['batch_size'] = len(current['user_id'])
             losses = self.train_recommender_vanilla(data, model, current, prev_data, snap_idx, prev_model)
             total_losses.append(losses)
