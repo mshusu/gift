@@ -59,7 +59,7 @@ class LGN(Model):
 
     def forward(self, u_ids, i_ids):
         all_users, all_items = self.computer()
-        u_ids = u_ids.repeat((1, i_ids.shape[1])) 
+        # u_ids = u_ids.repeat((1, i_ids.shape[1])) 
         u_ids=u_ids.to(torch.long)
         i_ids=i_ids.to(torch.long)
         cf_u_vectors = all_users[u_ids]

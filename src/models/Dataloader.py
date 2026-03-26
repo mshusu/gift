@@ -53,7 +53,8 @@ class Dataset(BaseDataset):
         hist_user_clicked_list, _, hist_unique_items = utils.load_data_as_dict(corpus, 'hist', data_idx)
         for user_id in hist_user_clicked_list:
             hist_user_clicked_list[user_id] = set(hist_user_clicked_list[user_id])
-        hist_user_clicked_set = hist_user_clicked_list
+        self.hist_user_clicked_set = hist_user_clicked_list
+        self.hist_unique_items = hist_unique_items
 
         
         # get neighbor set for each item
@@ -114,7 +115,7 @@ class Dataset(BaseDataset):
         user_id, item_id = self.train_data[index]
         neg_items = self._sample_neg_items_fast(user_id)
         feed_dict = {
-            'user_id': user_id,     # single
+            'user_id': torch.tensor([user_id]),     # single
             'item_id': torch.cat([torch.tensor([item_id]), neg_items])
         }
         return feed_dict
