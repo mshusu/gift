@@ -235,7 +235,7 @@ class Runner(object):
             b = 0
 
             # Validation and early stopping
-            eval_step = 1           # pisa default value 2
+            eval_step = 2           # pisa default value 2
             patience_start_step = 0 # pisa default value 20
             if  (epoch) >= minimum and (epoch+1) % eval_step == 0:
                 #v_results = Inference.Test(args, model, corpus, 'val', snap_idx)
@@ -251,7 +251,7 @@ class Runner(object):
                 if epoch+1 > patience_start_step:
                     #recall_list.append((epoch, v_results[1][0]))
                     if v_results[a][b] < best_recall:
-                        cnt += 1
+                        cnt += eval_step
                     else:
                         cnt = 0
                     if cnt >= patience:
