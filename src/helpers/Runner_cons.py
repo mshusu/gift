@@ -96,6 +96,30 @@ class Runner_cons(object):
         plt.savefig(args.test_result_file+'_{}_{}.png'.format(name, snap_idx))
         plt.close()
         
+    def write_results_excl_cold(self, model, args, corpus, snap_idx, test_loads, val_loads, hist_loads, option=''):
+        """Write validation and test results to files and save metrics in JSON format."""
+        v_results = Inference.Test_excl_cold(args, model, test_loads, hist_loads)
+        t_results = Inference.Test_excl_cold(args, model, val_loads, hist_loads)
+        logging.info("Trained model testing")
+
+        # Save validation results
+        val_str = Inference.print_results(None, v_results, None)
+        val_path = os.path.join(self.test_result_file, f'{option}val_snap{snap_idx}.txt')
+        open(val_path, 'w+').write(val_str)
+
+        # Save test results
+        test_str = Inference.print_results(None, None, t_results)
+        test_path = os.path.join(self.test_result_file, f'{option}test_snap{snap_idx}.txt')
+        open(test_path, 'w+').write(test_str)
+
+        # Save metrics to JSON
+        Ks = [10, 20, 50, 100]
+        metrics = ['Recall', 'NDCG', 'MRR', 'Precision']
+        json_results = {f'{metric}@{k}': v for metric, values in zip(metrics, t_results) for k, v in zip(Ks, values)}
+        json_path = os.path.join(self.test_result_file, f'{option}test_snap{snap_idx}.json')
+        with open(json_path, 'w') as f:
+            json.dump(json_results, f, indent=4)
+
     def write_results(self, model, args, corpus, snap_idx):
         
         v_results = Inference.Test(args, model, corpus, 'val', snap_idx)
@@ -128,13 +152,18 @@ class Runner_cons(object):
 
         if model.optimizer is None:
             model.optimizer = self._build_optimizer(model)
+        
+        test_loads = utils.load_data_as_dict(corpus, 'test', snap_idx)
+        val_loads  = utils.load_data_as_dict(corpus, 'val', snap_idx)
+        hist_loads = utils.load_data_as_dict(corpus, 'hist', snap_idx)
 
         # only for pretrained model (time=0) if exists
         if snap_idx == 0 and os.path.exists(model.model_path+'_snap{}'.format(0)) and force_train == False:
             logging.info('Time_idx {} model already exists. Skip training and test directly.'.format(snap_idx))
             # test the model
             model.load_model(model.model_path+'_snap{}'.format(snap_idx))
-            self.write_results(model, args, corpus, snap_idx)
+            #self.write_results(model, args, corpus, snap_idx)
+            self.write_results_excl_cold(model, args, snap_idx, test_loads, val_loads, hist_loads)
             return 0, 0
         
         else:
@@ -142,7 +171,8 @@ class Runner_cons(object):
             if snap_idx > 0 and 'pretrain' in args.dyn_method:
                 logging.info('Time_idx {} model already exists. Skip training and test directly.'.format(snap_idx))
                 model.load_model(model.model_path+'_snap0')
-                self.write_results(model, args, corpus, snap_idx)
+                #self.write_results(model, args, corpus, snap_idx)
+                self.write_results_excl_cold(model, args, snap_idx, test_loads, val_loads, hist_loads)
                 return 0, 0
             else:
                 logging.info('Time_idx {} model does not exist. Start training.'.format(snap_idx))
@@ -210,10 +240,11 @@ class Runner_cons(object):
                 exit()
 
             # Validation and early stopping
-            eval_step = 2           # pisa default value 2
+            eval_step = args.eval_step # pisa default value 2
             patience_start_step = 0 # pisa default value 20
             if epoch >= 0 and (epoch + 1) % eval_step == 0:
-                v_results = Inference.Test(args, model, corpus, 'val', snap_idx)
+                #v_results = Inference.Test(args, model, corpus, 'val', snap_idx)
+                v_results = Inference.Test_excl_cold(args, model, val_loads, hist_loads)
                 if v_results[0][0] > best_recall:
                     best_epoch = epoch + 1
                     best_recall = v_results[0][0]
@@ -233,7 +264,8 @@ class Runner_cons(object):
         # Load best model and write results
         model_path = f'{model.model_path}_snap{snap_idx}'
         model.load_model(model_path)
-        self.write_results(model, args, corpus, snap_idx)
+        #self.write_results(model, args, corpus, snap_idx)
+        self.write_results_excl_cold(model, args, snap_idx, test_loads, val_loads, hist_loads)
 
         return best_epoch
 

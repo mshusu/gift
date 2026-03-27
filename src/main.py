@@ -39,6 +39,8 @@ def parse_global_args(parser):
 
     parser.add_argument('--force_train', action='store_true', help='when the param occurs, \
                         train model from scratch instead of reusing exsited model of file')
+    parser.add_argument('--eval_step', type=int, default=2)
+    
     return parser
 
 def test_file(args, corpus, test_type):
@@ -185,7 +187,7 @@ def main():
 
     # mean and trend files (optional)
     test_file(args, corpus, 'test')
-    #test_file(args, corpus, 'val')
+    test_file(args, corpus, 'val')
 
 
     logging.info(os.linesep + '-' * 45 + ' END: ' + utils.get_time() + ' ' + '-' * 45)

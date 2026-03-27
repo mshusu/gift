@@ -94,23 +94,29 @@ class Runner(object):
 
 
 
-    def write_results_excl_cold(self, model, args, snap_idx, test_loads, val_loads, hist_loads):
+    def write_results_excl_cold(self, model, args, corpus, snap_idx, test_loads, val_loads, hist_loads, option=''):
+        """Write validation and test results to files and save metrics in JSON format."""
         v_results = Inference.Test_excl_cold(args, model, test_loads, hist_loads)
         t_results = Inference.Test_excl_cold(args, model, val_loads, hist_loads)
         logging.info("Trained model testing")
 
+        # Save validation results
         val_str = Inference.print_results(None, v_results, None)
-        val_result_filename_ = os.path.join(self.test_result_file, 'val_snap{}.txt'.format(snap_idx))
-        open(val_result_filename_, 'w+').write(val_str)
-        test_str = Inference.print_results(None, None, t_results)
-        result_filename_ = os.path.join(self.test_result_file, 'test_snap{}.txt'.format(snap_idx))
-        open(result_filename_, 'w+').write(test_str)
+        val_path = os.path.join(self.test_result_file, f'{option}val_snap{snap_idx}.txt')
+        open(val_path, 'w+').write(val_str)
 
-        ### save the test results to a json file for later analysis ###
-        Ks = [10,20,50,100]
-        json_t = {f'{metric}@{k}': v for metric, v in zip(['Recall', 'NDCG', 'MRR', 'Precision'], t_results) for k, v in zip(Ks, v)}
-        with open (os.path.join(self.test_result_file, 'test_snap{}.json'.format(snap_idx)), 'w') as f:
-            json.dump(json_t, f, indent=4)
+        # Save test results
+        test_str = Inference.print_results(None, None, t_results)
+        test_path = os.path.join(self.test_result_file, f'{option}test_snap{snap_idx}.txt')
+        open(test_path, 'w+').write(test_str)
+
+        # Save metrics to JSON
+        Ks = [10, 20, 50, 100]
+        metrics = ['Recall', 'NDCG', 'MRR', 'Precision']
+        json_results = {f'{metric}@{k}': v for metric, values in zip(metrics, t_results) for k, v in zip(Ks, values)}
+        json_path = os.path.join(self.test_result_file, f'{option}test_snap{snap_idx}.json')
+        with open(json_path, 'w') as f:
+            json.dump(json_results, f, indent=4)
 
     def write_results(self, model, args, corpus, snap_idx):
         v_results = Inference.Test(args, model, corpus, 'val', snap_idx)
@@ -235,7 +241,7 @@ class Runner(object):
             b = 0
 
             # Validation and early stopping
-            eval_step = 2           # pisa default value 2
+            eval_step = args.eval_step # pisa default value 2
             patience_start_step = 0 # pisa default value 20
             if  (epoch) >= minimum and (epoch+1) % eval_step == 0:
                 #v_results = Inference.Test(args, model, corpus, 'val', snap_idx)
