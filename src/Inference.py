@@ -259,65 +259,58 @@ def Test(args, model, corpus, data_type, data_idx):
 def Test_excl_cold(args, model, test_loads, hist_loads):
     batch_size = args.batch_size
     model.eval()
+    device = model._device
 
     test_user_clicked_list, testUsers, _ = test_loads
+    hist_user_clicked_list, hist_users_list, hist_unique_items = hist_loads
+    
+    # --- GCN propgation ---
+    all_users_emb, all_items_emb = model.computer() 
+    
+    # target Item Embedding (excl. cold Item)
+    target_items_emb = all_items_emb[torch.from_numpy(hist_unique_items).to(device)] 
 
-    hist_user_clicked_list, hist_users, hist_unique_items = hist_loads
-
-    Ks = [10,20,50,100]
+    # target user
+    hist_users_set = set(hist_users_list)
+    valid_test_users = [u for u in testUsers if u in hist_users_set]
+    valid_test_user_clicked_set = {u:set(test_user_clicked_list[u]) for u in valid_test_users}
+    
+    # --- proprecess Mask looktable ---
+    max_item_id = hist_unique_items.max()
+    item_mapping = torch.full((max_item_id + 1,), -1, dtype=torch.long, device=device)
+    item_mapping[torch.from_numpy(hist_unique_items).to(device)] = torch.arange(len(hist_unique_items), device=device)
+    
+    Ks = [10, 20, 50, 100]
     max_K = max(Ks)
 
-    users_list = []
     rating_list = []
     ground_truth_list = []
 
     with torch.no_grad():
-        n_batch = len(testUsers) // batch_size
-        if len(testUsers) % batch_size != 0:
-            n_batch += 1
-        
-        for i in range(n_batch):
-            start = i * batch_size
-            end = min((i + 1) * batch_size, len(testUsers))
-            batch_users = testUsers[start:end]
-
-            target_users,  ground_truth = [], []
-            for user in batch_users:
-                # skip cold-start users
-                if user in hist_users:
-                    target_users.append(user)
-                    ground_truth.append(test_user_clicked_list[user])
+                
+        for i in range(0, len(valid_test_users), batch_size):
+            batch_users = valid_test_users[i : i + batch_size]
             
-            if len(target_users) == 0:
-                n_batch -= 1
-                continue
-
-            user_id = torch.tensor(target_users, dtype=torch.int64).to(model._device)
-            item_id = torch.tensor(np.arange(len(hist_unique_items)), dtype=torch.int64).to(model._device)
-
-            scores = model.infer_user_scores(user_id, item_id)
-            scores = scores.cpu().numpy()
-
-            # mask clicked
-            max_item_id = hist_unique_items.max()
-            lookup_table = np.full(max_item_id + 1, -1, dtype=np.int32)
-            lookup_table[hist_unique_items] = np.arange(len(hist_unique_items))
-            # mask logic
-            for i, user_id in enumerate(target_users):
-                clicked_raw = hist_user_clicked_list[user_id]
-                mapped_indices = lookup_table[clicked_raw]
-                final_mask = mapped_indices[mapped_indices != -1]
-                if len(final_mask) > 0:
-                    scores[i, final_mask] = -float('inf')
-
-            _, rating_K = torch.topk(torch.tensor(scores), k=max_K)
+            # --- read user embedding w/o GCN propgation ---
+            user_idx = torch.tensor(batch_users, dtype=torch.long, device=device)
+            current_user_emb = all_users_emb[user_idx] # [batch_size, dim]
             
-            users_list.append(batch_users)
-            rating_list.extend(rating_K.cpu())
-            ground_truth_list.extend(ground_truth)
-        
-        assert n_batch == len(users_list)
-        
+            scores = torch.matmul(current_user_emb, target_items_emb.t()) # [batch_size, num_items]
+
+            # ---  Mask clicked items---
+            for idx, u in enumerate(batch_users):
+                clicked_items = torch.tensor(hist_user_clicked_list[u], dtype=torch.long, device=device)
+                mapped_indices = item_mapping[clicked_items]
+                valid_indices = mapped_indices[mapped_indices != -1]
+                if len(valid_indices) > 0:
+                    scores[idx, valid_indices] = -1e9
+
+            # --- GPU Top-K ---
+            _, rating_K = torch.topk(scores, k=max_K, dim=1)
+            
+            rating_list.extend(rating_K.detach().cpu())
+            ground_truth_list.extend([valid_test_user_clicked_set[u] for u in batch_users])
+
         recall, NDCG, MRR, precision = computeTopNAccuracy(ground_truth_list, rating_list, Ks)
 
         return recall, NDCG, MRR, precision
