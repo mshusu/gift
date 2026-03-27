@@ -71,6 +71,68 @@ def computeTopNAccuracy(GroundTruth, predictedIndices, topN):
     return recall, NDCG, MRR, precision
 
 
+def computeTopNAccuracy_fast(GroundTruth, predictedIndices, topN):
+    """
+    vector-based metric cal
+    GroundTruth: List of sets ( set = clicked items)
+    predictedIndices: list of NumPy array [max_K] or [num_users, max_K]
+    topN: List of int ( [10, 20, 50, 100])
+    """
+    # 1. to numpy array
+    pred = np.vstack(predictedIndices)
+    num_users = len(pred)
+    max_k = pred.shape[1]
+
+    # 2. Hit Matrix
+    hits = np.zeros(pred.shape, dtype=np.int8)
+    actual_counts = np.fromiter((len(gt) for gt in GroundTruth), dtype=np.int32, count=len(GroundTruth))
+
+    for i in range(num_users):
+        gt_set = GroundTruth[i]
+        hits[i, :] = [1 if item in gt_set else 0 for item in pred[i]]
+
+    # 3. cal stat
+    # each row are cum hitnum of 1~max_k positions
+    hit_cumsum = np.cumsum(hits, axis=1) 
+    
+    # DCG: score / log2(rank + 1) ->  rank is j+1 so that log2(j+2)
+    weights = 1.0 / np.log2(np.arange(2, max_k + 2))
+    dcg_matrix = np.cumsum(hits * weights, axis=1)
+    weights_cumsum = np.cumsum(weights)
+
+    results = {'recall': [], 'ndcg': [], 'mrr': [], 'precision': []}
+
+    for k in topN:
+        k_idx = k - 1
+        
+        # --- Recall & Precision ---
+        user_recalls = hit_cumsum[:, k_idx] / actual_counts
+        user_precisions = hit_cumsum[:, k_idx] / k
+        
+        # --- MRR ---
+        # Find the index of the first hit (value of 1) in each row
+        # argmax returns the index of the first occurrence of the maximum value
+        first_hit_idx = np.argmax(hits[:, :k], axis=1)
+        #Caution: Since argmax returns index 0 when a row contains only zeros, ensure has_hit is used for validation.
+        has_hit = np.max(hits[:, :k], axis=1) > 0
+        user_mrrs = np.where(has_hit, 1.0 / (first_hit_idx + 1), 0.0)
+
+        # --- NDCG ---
+        current_dcg = dcg_matrix[:, k_idx]
+        # IDCG sum of min(k, len(gt)) elements
+        idcg_counts = np.minimum(k, actual_counts)
+        user_idcgs = weights_cumsum[idcg_counts - 1]
+        user_ndcgs = current_dcg / user_idcgs
+
+        # avg over user
+        results['recall'].append(round(np.mean(user_recalls), 4))
+        results['precision'].append(round(np.mean(user_precisions), 4))
+        results['mrr'].append(round(np.mean(user_mrrs), 4))
+        results['ndcg'].append(round(np.mean(user_ndcgs), 4))
+
+    return results['recall'], results['ndcg'], results['mrr'], results['precision']
+
+
 def Test_group(args, model, corpus, data_type, data_idx, group_files):
     """
     Args:
@@ -268,7 +330,9 @@ def Test_excl_cold(args, model, test_loads, hist_loads):
     all_users_emb, all_items_emb = model.computer() 
     
     # target Item Embedding (excl. cold Item)
-    target_items_emb = all_items_emb[torch.from_numpy(hist_unique_items).to(device)] 
+    target_items_tensor = torch.from_numpy(hist_unique_items).to(device)
+    target_items_emb = all_items_emb[target_items_tensor] 
+    
 
     # target user
     hist_users_set = set(hist_users_list)
@@ -306,12 +370,14 @@ def Test_excl_cold(args, model, test_loads, hist_loads):
                     scores[idx, valid_indices] = -1e9
 
             # --- GPU Top-K ---
-            _, rating_K = torch.topk(scores, k=max_K, dim=1)
+            #_, rating_K = torch.topk(scores, k=max_K, dim=1)
+            _, col_indices = torch.topk(scores, k=max_K, dim=1)
+            rating_K = target_items_tensor[col_indices]
             
-            rating_list.extend(rating_K.detach().cpu())
+            rating_list.extend(rating_K.cpu().numpy())
             ground_truth_list.extend([valid_test_user_clicked_set[u] for u in batch_users])
 
-        recall, NDCG, MRR, precision = computeTopNAccuracy(ground_truth_list, rating_list, Ks)
+        recall, NDCG, MRR, precision = computeTopNAccuracy_fast(ground_truth_list, rating_list, Ks)
 
         return recall, NDCG, MRR, precision
 
