@@ -96,7 +96,7 @@ class Runner_cons(object):
         plt.savefig(args.test_result_file+'_{}_{}.png'.format(name, snap_idx))
         plt.close()
         
-    def write_results_excl_cold(self, model, args, corpus, snap_idx, test_loads, val_loads, hist_loads, option=''):
+    def write_results_excl_cold(self, model, args, snap_idx, test_loads, val_loads, hist_loads, option=''):
         """Write validation and test results to files and save metrics in JSON format."""
         v_results = Inference.Test_excl_cold(args, model, test_loads, hist_loads)
         t_results = Inference.Test_excl_cold(args, model, val_loads, hist_loads)
