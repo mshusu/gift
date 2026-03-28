@@ -250,14 +250,12 @@ class Runner_cons(object):
                     best_recall = v_results[0][0]
                     save_path = f'_snap{snap_idx}'
                     model.save_model(add_path=save_path)
-
-                if epoch + 1 > patience_start_step:
-                    if v_results[0][0] < best_recall:
+                    cnt = 0
+                else:
+                    if epoch + 1 > patience_start_step:
                         cnt += eval_step
-                    else:
-                        cnt = 0
-                    if cnt >= patience:
-                        break
+                        if cnt >= patience:
+                            break
 
         logging.info(f"Training complete. Best validation epoch: {best_epoch:03d}")
         

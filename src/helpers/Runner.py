@@ -252,16 +252,12 @@ class Runner(object):
                     best_epoch = epoch+1
                     best_recall = v_results[a][b] # top-10 or top-20
                     model.save_model(add_path='_snap{}'.format(snap_idx))
-
-                # early stopping
-                if epoch+1 > patience_start_step:
-                    #recall_list.append((epoch, v_results[1][0]))
-                    if v_results[a][b] < best_recall:
+                    cnt = 0
+                else:
+                    if epoch + 1 > patience_start_step:
                         cnt += eval_step
-                    else:
-                        cnt = 0
-                    if cnt >= patience:
-                        break
+                        if cnt >= patience:
+                            break
         
         logging.info("End train and valid. Best validation epoch is {:03d}.".format(best_epoch))
         model.load_model(model.model_path+'_snap{}'.format(snap_idx))
