@@ -174,10 +174,10 @@ class Runner_PISA:
             patience_start_step = 0 # pisa default value 20
             if epoch >= 0 and (epoch + 1) % eval_step == 0:
                 #v_results = Inference.Test(args, model, corpus, 'val', snap_idx)
-                v_results = Inference.Test_excl_cold(args, model, val_loads, hist_loads)
-                if v_results[0][0] > best_recall:
+                v_results = Inference.Test_excl_cold(args, model, val_loads, hist_loads, lite = True)
+                if v_results[0][1] > best_recall:
                     best_epoch = epoch + 1
-                    best_recall = v_results[0][0]
+                    best_recall = v_results[0][1]
                     save_path = f'_forward_snap{snap_idx}' if (step_flag == 0 and 'plasticity' in self.dyn_method) else f'_snap{snap_idx}'
                     model.save_model(add_path=save_path)
                     cnt = 0

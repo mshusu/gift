@@ -238,15 +238,15 @@ class Runner(object):
                 minimum = 0
                 
             a = 0
-            b = 0
+            b = 1
 
             # Validation and early stopping
             eval_step = args.eval_step # pisa default value 2
             patience_start_step = 0 # pisa default value 20
             if  (epoch) >= minimum and (epoch+1) % eval_step == 0:
                 #v_results = Inference.Test(args, model, corpus, 'val', snap_idx)
-                v_results = Inference.Test_excl_cold(args, model, val_loads, hist_loads)
-                Inference.print_results(None, v_results, None)
+                v_results = Inference.Test_excl_cold(args, model, val_loads, hist_loads, lite = True)
+                #Inference.print_results(None, v_results, None)
 
                 if v_results[a][b] > best_recall:
                     best_epoch = epoch+1

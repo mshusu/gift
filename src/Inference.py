@@ -71,7 +71,7 @@ def computeTopNAccuracy(GroundTruth, predictedIndices, topN):
     return recall, NDCG, MRR, precision
 
 
-def computeTopNAccuracy_fast(GroundTruth, predictedIndices, topN):
+def computeTopNAccuracy_fast(GroundTruth, predictedIndices, topN, lite = False):
     """
     vector-based metric cal
     GroundTruth: List of sets ( set = clicked items)
@@ -94,6 +94,10 @@ def computeTopNAccuracy_fast(GroundTruth, predictedIndices, topN):
     # 3. cal stat
     # each row are cum hitnum of 1~max_k positions
     hit_cumsum = np.cumsum(hits, axis=1) 
+
+    if lite:
+        user_recalls = hit_cumsum[:, k_idx] / actual_counts
+        return user_recalls, None, None, None
     
     # DCG: score / log2(rank + 1) ->  rank is j+1 so that log2(j+2)
     weights = 1.0 / np.log2(np.arange(2, max_k + 2))
@@ -318,7 +322,7 @@ def Test(args, model, corpus, data_type, data_idx):
 
 
 # inference excl. cold user & cold item
-def Test_excl_cold(args, model, test_loads, hist_loads):
+def Test_excl_cold(args, model, test_loads, hist_loads, lite = False):
     batch_size = args.batch_size
     model.eval()
     device = model._device
@@ -326,32 +330,32 @@ def Test_excl_cold(args, model, test_loads, hist_loads):
     test_user_clicked_list, testUsers, _ = test_loads
     hist_user_clicked_list, hist_users_list, hist_unique_items = hist_loads
     
-    # --- GCN propgation ---
-    all_users_emb, all_items_emb = model.computer() 
-    
-    # target Item Embedding (excl. cold Item)
-    target_items_tensor = torch.from_numpy(hist_unique_items).to(device)
-    target_items_emb = all_items_emb[target_items_tensor] 
-    
-
-    # target user
-    hist_users_set = set(hist_users_list)
-    valid_test_users = [u for u in testUsers if u in hist_users_set]
-    valid_test_user_clicked_set = {u:set(test_user_clicked_list[u]) for u in valid_test_users}
-    
-    # --- proprecess Mask looktable ---
-    max_item_id = hist_unique_items.max()
-    item_mapping = torch.full((max_item_id + 1,), -1, dtype=torch.long, device=device)
-    item_mapping[torch.from_numpy(hist_unique_items).to(device)] = torch.arange(len(hist_unique_items), device=device)
-    
-    Ks = [10, 20, 50, 100]
-    max_K = max(Ks)
-
-    rating_list = []
-    ground_truth_list = []
-
     with torch.no_grad():
-                
+
+        # --- GCN propgation ---
+        all_users_emb, all_items_emb = model.computer() 
+        
+        # target Item Embedding (excl. cold Item)
+        target_items_tensor = torch.from_numpy(hist_unique_items).to(device)
+        target_items_emb = all_items_emb[target_items_tensor] 
+        
+
+        # target user
+        hist_users_set = set(hist_users_list)
+        valid_test_users = [u for u in testUsers if u in hist_users_set]
+        valid_test_user_clicked_set = {u:set(test_user_clicked_list[u]) for u in valid_test_users}
+        
+        # --- proprecess Mask looktable ---
+        max_item_id = hist_unique_items.max()
+        item_mapping = torch.full((max_item_id + 1,), -1, dtype=torch.long, device=device)
+        item_mapping[torch.from_numpy(hist_unique_items).to(device)] = torch.arange(len(hist_unique_items), device=device)
+        
+        Ks = [10, 20, 50, 100]
+        max_K = max(Ks)
+
+        rating_list = []
+        ground_truth_list = []
+         
         for i in range(0, len(valid_test_users), batch_size):
             batch_users = valid_test_users[i : i + batch_size]
             
@@ -377,7 +381,7 @@ def Test_excl_cold(args, model, test_loads, hist_loads):
             rating_list.extend(rating_K.cpu().numpy())
             ground_truth_list.extend([valid_test_user_clicked_set[u] for u in batch_users])
 
-        recall, NDCG, MRR, precision = computeTopNAccuracy_fast(ground_truth_list, rating_list, Ks)
+        recall, NDCG, MRR, precision = computeTopNAccuracy_fast(ground_truth_list, rating_list, Ks, lite)
 
         return recall, NDCG, MRR, precision
 

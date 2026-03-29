@@ -189,10 +189,9 @@ def main():
     test_file(args, corpus, 'test')
     test_file(args, corpus, 'val')
 
-
-    logging.info(os.linesep + '-' * 45 + ' END: ' + utils.get_time() + ' ' + '-' * 45)
     end_time = datetime.datetime.now()
     print(f"Time duration for training & test: {end_time - start_time}")
+    logging.info(os.linesep + '-' * 45 + ' END: ' + utils.get_time() + ' ' + '-' * 45)
 
 def post():
     return args.test_result_file
