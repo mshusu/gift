@@ -95,16 +95,19 @@ def computeTopNAccuracy_fast(GroundTruth, predictedIndices, topN, lite = False):
     # each row are cum hitnum of 1~max_k positions
     hit_cumsum = np.cumsum(hits, axis=1) 
 
+    results = {'recall': [], 'ndcg': [], 'mrr': [], 'precision': []}
+
     if lite:
-        user_recalls = hit_cumsum[:, k_idx] / actual_counts
-        return user_recalls, None, None, None
+        for k in topN:
+            k_idx = k - 1
+            user_recalls = hit_cumsum[:, k_idx] / actual_counts
+            results['recall'].append(round(np.mean(user_recalls), 4))
+        return results['recall'], None, None, None
     
     # DCG: score / log2(rank + 1) ->  rank is j+1 so that log2(j+2)
     weights = 1.0 / np.log2(np.arange(2, max_k + 2))
     dcg_matrix = np.cumsum(hits * weights, axis=1)
     weights_cumsum = np.cumsum(weights)
-
-    results = {'recall': [], 'ndcg': [], 'mrr': [], 'precision': []}
 
     for k in topN:
         k_idx = k - 1
