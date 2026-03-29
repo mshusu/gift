@@ -245,6 +245,8 @@ class Runner_cons(object):
             if epoch >= 0 and (epoch + 1) % eval_step == 0:
                 #v_results = Inference.Test(args, model, corpus, 'val', snap_idx)
                 v_results = Inference.Test_excl_cold(args, model, val_loads, hist_loads, lite = True)
+                # gc.collect()
+                torch.cuda.empty_cache()
                 if v_results[0][1] > best_recall:
                     best_epoch = epoch + 1
                     best_recall = v_results[0][1]
@@ -276,8 +278,8 @@ class Runner_cons(object):
                 model.update_kmeans(prev_model)
 
 
-        gc.collect()
-        torch.cuda.empty_cache()
+        # gc.collect()
+        # torch.cuda.empty_cache()
         dl = DataLoader(data, batch_size=self.batch_size, shuffle=shuffle, 
                        num_workers=self.num_workers, pin_memory=self.pin_memory)
 

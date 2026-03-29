@@ -246,8 +246,9 @@ class Runner(object):
             if  (epoch) >= minimum and (epoch+1) % eval_step == 0:
                 #v_results = Inference.Test(args, model, corpus, 'val', snap_idx)
                 v_results = Inference.Test_excl_cold(args, model, val_loads, hist_loads, lite = True)
+                # gc.collect()
+                torch.cuda.empty_cache()
                 #Inference.print_results(None, v_results, None)
-
                 if v_results[a][b] > best_recall:
                     best_epoch = epoch+1
                     best_recall = v_results[a][b] # top-10 or top-20
@@ -268,8 +269,8 @@ class Runner(object):
 
 
     def fit(self, model, data, prev_data, snap_idx, shuffle):
-        gc.collect()
-        torch.cuda.empty_cache()
+        # gc.collect()
+        # torch.cuda.empty_cache()
 
         dl = DataLoader(data, batch_size=self.batch_size, shuffle=shuffle, num_workers=8, pin_memory=self.pin_memory)
         

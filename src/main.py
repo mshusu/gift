@@ -7,6 +7,7 @@ import pickle
 import logging
 import argparse
 import torch
+import gc
 
 from helpers import Reader, Runner, Runner_PISA, Runner_cons
 from models import  Model
@@ -159,6 +160,8 @@ def main():
         if idx > 0 and args.model_name != "LGN":
             prev_data = Dataloader.Dataset(args, corpus, 'hist', idx-1)
 
+        gc.collect()
+        torch.cuda.empty_cache()
         if 'plasticity' in args.dyn_method:
             # Pure fine-tuning
             _ = runner.train(model, data_dict, args, corpus, prev_data, idx, force_train, 0)
