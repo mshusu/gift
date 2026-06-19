@@ -272,7 +272,7 @@ class Runner(object):
         # gc.collect()
         # torch.cuda.empty_cache()
 
-        dl = DataLoader(data, batch_size=self.batch_size, shuffle=shuffle, num_workers=8, pin_memory=self.pin_memory)
+        dl = DataLoader(data, batch_size=self.batch_size, shuffle=shuffle, num_workers=self.num_workers, pin_memory=self.pin_memory)
         
         flag = 0
         for current in dl:
