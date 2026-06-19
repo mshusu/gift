@@ -123,20 +123,32 @@ class Dataset(BaseDataset):
     def _sample_neg_items_fast(self, user_id):
         num_neg = self.args.num_neg
         clicked_set = self.hist_user_clicked_set.get(user_id, set())
+        sample_pool = self.current_unique_items
 
-        valid_candidates = np.array(
-            [item for item in self.current_unique_items if item not in clicked_set],
-            dtype=np.int64
-        )
-
-        if len(valid_candidates) < num_neg:
-            raise ValueError(
-                "Not enough current-block negative candidates for "
-                f"user {user_id} in {self.data_type}_block{self.time_idx}: "
-                f"requested {num_neg}, available {len(valid_candidates)}."
+        if len(sample_pool) - len(clicked_set) < num_neg:
+            # Not enough distinct negatives: reuse each valid item evenly
+            targets = np.array(
+                [item for item in sample_pool if item not in clicked_set],
+                dtype=np.int64,
             )
+            repeats = num_neg // len(targets)
+            remainder = num_neg % len(targets)
+            neg_items = list(np.tile(targets, repeats))
+            neg_items.extend(np.random.choice(targets, size=remainder, replace=False))
+            return torch.tensor(neg_items, dtype=torch.int64)
 
-        neg_items = np.random.choice(valid_candidates, size=num_neg, replace=False)
+        neg_items = []
+        neg_set = set()
+        while len(neg_items) < num_neg:
+            samples = np.random.randint(0, len(sample_pool), size=num_neg * 2)
+            for idx in samples:
+                rand_item = sample_pool[idx]
+                if rand_item not in clicked_set and rand_item not in neg_set:
+                    neg_items.append(rand_item)
+                    neg_set.add(rand_item)
+                if len(neg_items) == num_neg:
+                    break
+
         return torch.tensor(neg_items, dtype=torch.int64)
     
 
