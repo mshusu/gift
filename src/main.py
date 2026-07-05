@@ -11,7 +11,7 @@ import gc
 
 from helpers import Reader, Runner, Runner_PISA, Runner_cons
 from models import  Model
-from models.general import LGN, PISA_LGN, Contrastive_LGN
+from models.general import LGN, PISA_LGN, Contrastive_LGN, BPR
 from models import Dataloader
 from utils import utils
 import pandas as pd
