@@ -138,12 +138,15 @@ class Runner_PISA:
         """
         if snap_idx == 0 and step_flag == 1:
             model.load_state_dict(model._pisa_forward_state)
-            best_state = copy.deepcopy({k: v.cpu() for k, v in model.state_dict().items()})
+            model._pisa_snap_state = copy.deepcopy({k: v.cpu() for k, v in model.state_dict().items()})
             #self.write_results(model, args, corpus, snap_idx, option='')
             self.write_results_excl_cold(model, args, snap_idx, test_loads, val_loads, hist_loads, option='')
             return 0
         if snap_idx > 0 and 'finetune' in args.dyn_method:
-            # Model already carries previous snapshot weights in memory — no disk load needed
+            # For step_flag=1 (PISA): step_flag=0 left the model with forward weights,
+            # but we need the previous snapshot's PISA weights as starting point.
+            if step_flag == 1 and hasattr(model, '_pisa_snap_state'):
+                model.load_state_dict({k: v.to(model._device) for k, v in model._pisa_snap_state.items()})
             model.freeze_flag = 0
             prev_model = copy.deepcopy(model)
             prev_model.eval()
@@ -188,6 +191,8 @@ class Runner_PISA:
                     best_state = copy.deepcopy({k: v.cpu() for k, v in model.state_dict().items()})
                     if step_flag == 0 and 'plasticity' in self.dyn_method:
                         model._pisa_forward_state = copy.deepcopy(model.state_dict())
+                    if step_flag == 1 and 'plasticity' in self.dyn_method:
+                        model._pisa_snap_state = copy.deepcopy({k: v.cpu() for k, v in model.state_dict().items()})
                     cnt = 0
                 else:
                     if epoch + 1 > patience_start_step:
