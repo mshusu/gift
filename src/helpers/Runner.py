@@ -190,8 +190,12 @@ class Runner(object):
 
         # load previous model
         if snap_idx > 0 and 'finetune' in args.dyn_method:
-            #print(model.model_path+'_snap{}'.format(idx-1))
-            model.load_model(model.model_path+'_snap{}'.format(snap_idx-1))
+            # Model already carries previous snapshot weights in memory — no disk load needed
+            pass
+
+        # newtrain: reinitialize weights (model carried prev snapshot weights forward)
+        if 'newtrain' in self.dyn_method and snap_idx > 0:
+            model.apply(model.init_weights)
 
         self._check_time(start=True)
         self.time_d = {}
@@ -209,6 +213,7 @@ class Runner(object):
         cnt = 0
         best_recall = 0
         best_epoch = 0
+        best_state = None
 
         titer = tqdm(range(num_epoch), ncols=300)
         for epoch in titer:
@@ -252,7 +257,7 @@ class Runner(object):
                 if v_results[a][b] > best_recall:
                     best_epoch = epoch+1
                     best_recall = v_results[a][b] # top-10 or top-20
-                    model.save_model(add_path='_snap{}'.format(snap_idx))
+                    best_state = copy.deepcopy({k: v.cpu() for k, v in model.state_dict().items()})
                     cnt = 0
                 else:
                     if epoch + 1 > patience_start_step:
@@ -261,7 +266,7 @@ class Runner(object):
                             break
         
         logging.info("End train and valid. Best validation epoch is {:03d}.".format(best_epoch))
-        model.load_model(model.model_path+'_snap{}'.format(snap_idx))
+        model.load_state_dict({k: v.to(model._device) for k, v in best_state.items()})
         #self.write_results(model, args, corpus, snap_idx)
         self.write_results_excl_cold(model, args, snap_idx, test_loads, val_loads, hist_loads)
 

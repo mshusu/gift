@@ -192,7 +192,7 @@ class Runner_cons(object):
         prev_model = None
         hist_model = None
         if snap_idx > 0 and 'finetune' in args.dyn_method:
-            model.load_model(model.model_path + '_snap{}'.format(snap_idx - 1))
+            # Model already carries previous snapshot weights in memory — no disk load needed
             model.freeze_flag = 0
             prev_model = copy.deepcopy(model)
             prev_model.eval()
@@ -210,9 +210,12 @@ class Runner_cons(object):
 
 
         elif snap_idx > 0 and 'newtrain' in args.dyn_method:
+            # Model carries prev snapshot weights; use them for KD teacher
             prev_model = copy.deepcopy(model)
-            prev_model.load_model(model.model_path + '_snap{}'.format(snap_idx - 1))
             prev_model.eval()
+            model.apply(model.init_weights)
+            if args.reset_optimizer:
+                model.optimizer = None
 
 
         # # for lower bound minimization (plasticity)
@@ -226,6 +229,7 @@ class Runner_cons(object):
 
         best_recall = 0
         best_epoch = 0
+        best_state = None
         patience = 20
         cnt = 0
 
@@ -250,8 +254,7 @@ class Runner_cons(object):
                 if v_results[0][1] > best_recall:
                     best_epoch = epoch + 1
                     best_recall = v_results[0][1]
-                    save_path = f'_snap{snap_idx}'
-                    model.save_model(add_path=save_path)
+                    best_state = copy.deepcopy({k: v.cpu() for k, v in model.state_dict().items()})
                     cnt = 0
                 else:
                     if epoch + 1 > patience_start_step:
@@ -262,8 +265,7 @@ class Runner_cons(object):
         logging.info(f"Training complete. Best validation epoch: {best_epoch:03d}")
         
         # Load best model and write results
-        model_path = f'{model.model_path}_snap{snap_idx}'
-        model.load_model(model_path)
+        model.load_state_dict({k: v.to(model._device) for k, v in best_state.items()})
         #self.write_results(model, args, corpus, snap_idx)
         self.write_results_excl_cold(model, args, snap_idx, test_loads, val_loads, hist_loads)
 

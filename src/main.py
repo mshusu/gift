@@ -41,7 +41,9 @@ def parse_global_args(parser):
     parser.add_argument('--force_train', action='store_true', help='when the param occurs, \
                         train model from scratch instead of reusing exsited model of file')
     parser.add_argument('--eval_step', type=int, default=2)
-    
+    parser.add_argument('--reset_optimizer', type=int, default=1,
+                        help='Reset optimizer each snapshot. 1=reset (default), 0=carry forward.')
+
     return parser
 
 def test_file(args, corpus, test_type):
@@ -113,49 +115,56 @@ def main():
     logging.info('Test instances: {}'.format(corpus.n_test_batches))
     logging.info('Snap boundaries: {}'.format(corpus.snap_boundaries + [corpus.dataset_size]))
 
-    # Run model 
+    # Run model
     runner = runner_name(args, corpus) # autually trainer
+
     # data_dict = dict()
 
-    # full-retraining   
+    # full-retraining
     #utils.fix_seed(args.random_seed)
 
     if 'fulltrain' in args.dyn_method or 'pretrain' in args.dyn_method :
         data_type = 'hist'
     elif 'finetune' in args.dyn_method or 'newtrain' in args.dyn_method :
         data_type = 'incre'
-        
-    print('Data type: ', data_type)    
+
+    print('Data type: ', data_type)
+
+    force_train = args.force_train # False
+
+    # Create model ONCE — embedding dimensions from corpus (full user/item count)
+    initial_data = Dataloader.Dataset(args, corpus, data_type, 0)
+    _init_time_idx = 1 if corpus.n_snapshots > 1 else 0  # >0 triggers PIW params in Contrastive
+    model = model_name(args, corpus, initial_data, _init_time_idx)
+    model.apply(model.init_weights)
+    model.to(model._device)
+
+    # Handle pretrain model copy for snap0 (cross-run caching)
+    if os.path.exists(args.pretrain_model_path + '_snap0') and not force_train:
+        if args.model_path != args.pretrain_model_path:
+            shutil.copy(args.pretrain_model_path + '_snap0', args.model_path + '_snap0')
     time_d = {}
     best_epoch_d = {}
     prev_data=[]
 
-    force_train = args.force_train # False
-
     for idx in range(corpus.n_snapshots):
         data_dict = Dataloader.Dataset(args, corpus, data_type, idx)
 
-        utils.fix_seed(args.random_seed)
-        model = model_name(args, corpus, data_dict, idx)
-        model.apply(model.init_weights)
-        model.to(model._device)
-        
-        # if idx == 0 and pretrained == True and os.path.exists(args.model_path+'_snap{}'.format(0)):
-        #     print('Time idx 0 pretrained model exist. skip both pretraining and test')
-        #     continue
-        
-        print('pretrain model path:',args.pretrain_model_path+'_snap0')
-        #if idx == 0 and not os.path.exists(args.model_path+'_snap0') and os.path.exists(args.pretrain_model_path+'_snap0') and force_train == False:
-        if idx == 0 and os.path.exists(args.pretrain_model_path+'_snap0') and force_train == False:
-            print('Time idx 0 pretrained model exist. Copy the pretrained model to the model path')
-            # copy the pretrained model to the model path
-            # how to copy the file
-            # if the model_path is pretrain_model_path, pass
-            if args.model_path == args.pretrain_model_path:
-                print('model_path is pretrain_model_path, pass')
-            else:
-                shutil.copy(args.pretrain_model_path+'_snap0', args.model_path+'_snap0')
+        # Update per-snapshot context on the shared model
+        model.time_idx = idx
+        if hasattr(model, 'Graph'):
+            model.Graph = data_dict.getSparseGraph()
 
+        # Reset optimizer for fresh training each snapshot
+        if args.reset_optimizer:
+            model.optimizer = None
+
+        # For fulltrain only: reinitialize weights from scratch
+        # (newtrain reinit is handled inside runners, as Runner_cons needs prev weights first)
+        if 'fulltrain' in args.dyn_method:
+            model.apply(model.init_weights)
+
+        utils.fix_seed(args.random_seed)
 
         if idx > 0 and args.model_name != "LGN":
             prev_data = Dataloader.Dataset(args, corpus, 'hist', idx-1)
@@ -172,6 +181,9 @@ def main():
         #time_d['period_{}'.format(idx)] = t
         best_epoch_d['period_{}'.format(idx)] = best_epoch
         #best_epoch_list.append(best_epoch)
+
+    # Save final model to disk (only disk write for the entire run)
+    model.save_model(add_path='_snap{}'.format(corpus.n_snapshots - 1))
 
 
     # If there is keys/data in time_d, save it to file

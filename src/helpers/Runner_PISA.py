@@ -125,6 +125,10 @@ class Runner_PISA:
         #     self.write_results(model, args, corpus, snap_idx)
         #     return 0, 0
 
+        # newtrain: reinitialize weights (model carried prev snapshot weights forward)
+        if 'newtrain' in self.dyn_method and snap_idx > 0:
+            model.apply(model.init_weights)
+
         # Load previous model for fine-tuning
         prev_model = None
         forward_model = None
@@ -133,20 +137,20 @@ class Runner_PISA:
                    1 -> for PISA training -> model path suffix _snap{snap_idx}
         """
         if snap_idx == 0 and step_flag == 1:
-            model.load_model(f'{model.model_path}_forward_snap0')
-            model.save_model(add_path='_snap0')
+            model.load_state_dict(model._pisa_forward_state)
+            best_state = copy.deepcopy({k: v.cpu() for k, v in model.state_dict().items()})
             #self.write_results(model, args, corpus, snap_idx, option='')
             self.write_results_excl_cold(model, args, snap_idx, test_loads, val_loads, hist_loads, option='')
             return 0
         if snap_idx > 0 and 'finetune' in args.dyn_method:
-            model.load_model(f'{model.model_path}_snap{snap_idx-1}')
+            # Model already carries previous snapshot weights in memory — no disk load needed
             model.freeze_flag = 0
             prev_model = copy.deepcopy(model)
             prev_model.eval()
 
             if step_flag > 0:
                 forward_model = copy.deepcopy(model)
-                forward_model.load_model(f'{model.model_path}_forward_snap{snap_idx}')
+                forward_model.load_state_dict({k: v.to(forward_model._device) for k, v in model._pisa_forward_state.items()})
                 forward_model.eval()
 
         # Training loop
@@ -156,6 +160,7 @@ class Runner_PISA:
 
         best_recall = 0
         best_epoch = 0
+        best_state = None
         patience = 20
         cnt = 0
         model.forward_flag = step_flag
@@ -180,8 +185,9 @@ class Runner_PISA:
                 if v_results[0][1] > best_recall:
                     best_epoch = epoch + 1
                     best_recall = v_results[0][1]
-                    save_path = f'_forward_snap{snap_idx}' if (step_flag == 0 and 'plasticity' in self.dyn_method) else f'_snap{snap_idx}'
-                    model.save_model(add_path=save_path)
+                    best_state = copy.deepcopy({k: v.cpu() for k, v in model.state_dict().items()})
+                    if step_flag == 0 and 'plasticity' in self.dyn_method:
+                        model._pisa_forward_state = copy.deepcopy(model.state_dict())
                     cnt = 0
                 else:
                     if epoch + 1 > patience_start_step:
@@ -192,8 +198,7 @@ class Runner_PISA:
         logging.info(f"Training complete. Best validation epoch: {best_epoch:03d}")
         
         # Load best model and write results
-        model_path = f'{model.model_path}_forward_snap{snap_idx}' if (step_flag == 0 and 'plasticity' in self.dyn_method) else f'{model.model_path}_snap{snap_idx}'
-        model.load_model(model_path)
+        model.load_state_dict({k: v.to(model._device) for k, v in best_state.items()})
         #self.write_results(model, args, corpus, snap_idx, option='forward' if step_flag == 0 and 'plasticity' in self.dyn_method else '')
         self.write_results_excl_cold(model, args, snap_idx, test_loads, val_loads, hist_loads, option='forward' if step_flag == 0 and 'plasticity' in self.dyn_method else '')
 
