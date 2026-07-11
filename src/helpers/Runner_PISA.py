@@ -53,6 +53,14 @@ class Runner_PISA:
     
     def write_results_excl_cold(self, model, args, snap_idx, test_loads, val_loads, hist_loads, option=''):
         """Write validation and test results to files and save metrics in JSON format."""
+        compare_flag = getattr(args, 'compare_vectorized_eval', None)
+        vectorized_flag = getattr(args, 'vectorized_eval', None)
+        eval_msg = (
+            f'Eval flags: compare_vectorized_eval={compare_flag}, '
+            f'vectorized_eval={vectorized_flag}, snap_idx={snap_idx}, option={option}'
+        )
+        print(eval_msg, flush=True)
+        logging.info(eval_msg)
         v_results = Inference.Test_excl_cold_selected(args, model, test_loads, hist_loads, label='test')
         t_results = Inference.Test_excl_cold_selected(args, model, val_loads, hist_loads, label='val')
         logging.info("Trained model testing")

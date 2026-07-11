@@ -332,6 +332,9 @@ def Test(args, model, corpus, data_type, data_idx):
 
 # inference excl. cold user & cold item
 def Test_excl_cold(args, model, test_loads, hist_loads, lite = False):
+    if getattr(args, 'compare_vectorized_eval', 0) and not getattr(args, '_eval_compare_active', False):
+        return Test_excl_cold_selected(args, model, test_loads, hist_loads, lite=lite, label='direct')
+
     batch_size = args.eval_batch_size if getattr(args, 'eval_batch_size', 0) > 0 else args.batch_size
     model.eval()
     device = model._device
@@ -540,8 +543,17 @@ def Test_excl_cold_selected(args, model, test_loads, hist_loads, lite=False, lab
         start_msg = f'[EvalCompare:{label}] start lite={lite}'
         print(start_msg, flush=True)
         logging.info(start_msg)
-        old_results = Test_excl_cold(args, model, test_loads, hist_loads, lite=lite)
-        vec_results = Test_excl_cold_vectorized(args, model, test_loads, hist_loads, lite=lite)
+        had_compare_active = hasattr(args, '_eval_compare_active')
+        previous_compare_active = getattr(args, '_eval_compare_active', False)
+        args._eval_compare_active = True
+        try:
+            old_results = Test_excl_cold(args, model, test_loads, hist_loads, lite=lite)
+            vec_results = Test_excl_cold_vectorized(args, model, test_loads, hist_loads, lite=lite)
+        finally:
+            if had_compare_active:
+                args._eval_compare_active = previous_compare_active
+            else:
+                delattr(args, '_eval_compare_active')
         diffs = []
         for old_metric, vec_metric in zip(old_results, vec_results):
             if old_metric is None or vec_metric is None:
