@@ -62,10 +62,27 @@ def write_interactions_to_file(filename, data):
             f.writelines('{}\t{}\n'.format(d[0],d[1]))
 
 def batch_to_gpu(batch: dict, device) -> dict:
+    non_blocking = getattr(device, 'type', str(device)) == 'cuda'
     for c in batch:
         if type(batch[c]) is torch.Tensor:
-            batch[c] = batch[c].to(device)
+            batch[c] = batch[c].to(device, non_blocking=non_blocking)
     return batch
+
+
+def build_data_loader(dataset, batch_size, shuffle, num_workers, pin_memory,
+                      persistent_workers=False, prefetch_factor=4):
+    loader_kwargs = {
+        'batch_size': batch_size,
+        'shuffle': shuffle,
+        'num_workers': num_workers,
+        'pin_memory': bool(pin_memory),
+    }
+    if getattr(dataset.args, 'fast_sampler', 1) and hasattr(dataset, 'collate_batch'):
+        loader_kwargs['collate_fn'] = dataset.collate_batch
+    if num_workers > 0:
+        loader_kwargs['persistent_workers'] = bool(persistent_workers)
+        loader_kwargs['prefetch_factor'] = prefetch_factor
+    return torch.utils.data.DataLoader(dataset, **loader_kwargs)
 
 def squeeze_dict(batch: dict, dim=0) -> dict:
     for c in batch:
@@ -103,4 +120,3 @@ def load_data_as_dict(corpus, data_type, data_idx):
     #                                     shape=(corpus.n_users, corpus.n_items))
     unique_items = np.array(list(set(items)))  
     return  user_clicked_list, users, unique_items
-

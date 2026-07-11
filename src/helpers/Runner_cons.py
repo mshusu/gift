@@ -55,6 +55,9 @@ class Runner_cons(object):
         self.optimizer_name = args.optimizer
         self.num_workers = args.num_workers
         self.pin_memory = args.pin_memory
+        self.persistent_workers = getattr(args, 'persistent_workers', 1)
+        self.prefetch_factor = getattr(args, 'prefetch_factor', 4)
+        self.shuffle = bool(getattr(args, 'shuffle', 1))
         self.result_file = args.result_file
         self.dyn_method = args.dyn_method
         self.time = None  # will store [start_time, last_step_time]
@@ -231,7 +234,7 @@ class Runner_cons(object):
 
         for epoch in tqdm(range(num_epoch), ncols=100, mininterval=1):
             model.epoch = epoch
-            losses = self.fit(model, data_dict, prev_data, snap_idx, True, prev_model)
+            losses = self.fit(model, data_dict, prev_data, snap_idx, self.shuffle, prev_model)
             # loss, bpr_loss, kd_loss, kd_loss_user, kd_loss_item, kd_loss_user_neighbor, kd_loss_item_neighbor
             logging.info(f'Epoch {epoch} total_loss={losses[0]:.4f} bpr_loss={losses[1]:.4f} kd_loss={losses[2]:.4f} kd_user={losses[3]:.4f} kd_item={losses[4]:.4f} kd_user_neigh={losses[5]:.4f} kd_item_neigh={losses[6]:.4f}')
 
@@ -246,7 +249,6 @@ class Runner_cons(object):
                 #v_results = Inference.Test(args, model, corpus, 'val', snap_idx)
                 v_results = Inference.Test_excl_cold(args, model, val_loads, hist_loads, lite = True)
                 # gc.collect()
-                torch.cuda.empty_cache()
                 if v_results[0][1] > best_recall:
                     best_epoch = epoch + 1
                     best_recall = v_results[0][1]
@@ -280,8 +282,15 @@ class Runner_cons(object):
 
         # gc.collect()
         # torch.cuda.empty_cache()
-        dl = DataLoader(data, batch_size=self.batch_size, shuffle=shuffle, 
-                       num_workers=self.num_workers, pin_memory=self.pin_memory)
+        dl = utils.build_data_loader(
+            data,
+            batch_size=self.batch_size,
+            shuffle=shuffle,
+            num_workers=self.num_workers,
+            pin_memory=self.pin_memory,
+            persistent_workers=self.persistent_workers,
+            prefetch_factor=self.prefetch_factor,
+        )
 
         total_losses = []
         for current in dl:

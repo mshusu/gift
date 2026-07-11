@@ -201,6 +201,38 @@ class Model(torch.nn.Module):
         zero_tensor = torch.tensor([0.0], dtype=torch.float32).to(self._device)
         return bpr_loss, bpr_loss, zero_tensor, zero_tensor, zero_tensor, zero_tensor, zero_tensor
 
+    def _get_index_mask(self, name, values, size):
+        cache_name = f'_{name}_mask'
+        cached = getattr(self, cache_name, None)
+        if cached is None or cached.device != self._device:
+            cached = torch.zeros(size, dtype=torch.bool, device=self._device)
+            if values:
+                cached[torch.as_tensor(list(values), dtype=torch.long, device=self._device)] = True
+            setattr(self, cache_name, cached)
+        return cached
+
+    def _flatten_neighbors(self, owners, neigh_dict):
+        neigh_chunks = []
+        owner_chunks = []
+        for owner in owners.detach().cpu().tolist():
+            neighbors = neigh_dict.get(int(owner), [])
+            if len(neighbors) == 0:
+                continue
+            neigh_chunks.append(torch.as_tensor(neighbors, dtype=torch.long, device=self._device))
+            owner_chunks.append(torch.full((len(neighbors),), int(owner), dtype=torch.long, device=self._device))
+
+        if not neigh_chunks:
+            empty = torch.empty(0, dtype=torch.long, device=self._device)
+            return empty, empty
+        return torch.cat(neigh_chunks), torch.cat(owner_chunks)
+
+    def _weights_for_owners(self, users, weights, owners):
+        weights = weights.squeeze()
+        sorted_users, order = torch.sort(users)
+        sorted_weights = weights[order]
+        positions = torch.searchsorted(sorted_users, owners)
+        return sorted_weights[positions]
+
     def loss(self, data, batch_data, prev_data, time_idx, prev_model, reduction):
         all_users, all_items = self.computer()
         u_ids = batch_data['user_id'].repeat((1, batch_data['item_id'].shape[1])).to(torch.long)
@@ -221,8 +253,10 @@ class Model(torch.nn.Module):
 
         pos_i_ids = i_ids[:, 0]
         users, items = u_ids.unique(), pos_i_ids.unique()
-        users = users[torch.isin(users, torch.tensor(list(prev_data.user_set)).to(self._device))]
-        items = items[torch.isin(items, torch.tensor(list(prev_data.item_set)).to(self._device))]
+        prev_user_mask = self._get_index_mask('prev_user', prev_data.user_set, self.user_num)
+        prev_item_mask = self._get_index_mask('prev_item', prev_data.item_set, self.item_num)
+        users = users[prev_user_mask[users]]
+        items = items[prev_item_mask[items]]
         if len(users) == 0 or len(items) == 0:
             return self.return_zero_losses(bpr_loss)
         
@@ -242,27 +276,8 @@ class Model(torch.nn.Module):
 
         # distillation between user in the previous time & user in the current time
         # distillation between user's neighbors in the previous time & user in the current time 
-        neighbor_items_total = torch.tensor([]).to(torch.long).to(self._device)
-        users_total = torch.tensor([]).to(torch.long).to(self._device)
-        for user in users:
-            neighbor_items = prev_data.user_neigh[user.item()]
-            if len(neighbor_items) == 0:
-                continue
-            neighbor_items = torch.tensor(neighbor_items).to(self._device)
-            neighbor_items_total = torch.cat((neighbor_items_total, neighbor_items), axis=0)
-            # duplicate user as same size as the number of neighbor items
-            users_total = torch.cat((users_total, user.repeat((len(neighbor_items)))), axis=0)
-
-
-        neighbor_users_total = torch.tensor([]).to(torch.long).to(self._device)
-        items_total = torch.tensor([]).to(torch.long).to(self._device)
-        for item in items:
-            neighbor_users = prev_data.item_neigh[item.item()]
-            if len(neighbor_users) == 0:
-                continue
-            neighbor_users = torch.tensor(neighbor_users).to(self._device)
-            neighbor_users_total = torch.cat((neighbor_users_total, neighbor_users), axis=0)
-            items_total = torch.cat((items_total, item.repeat((len(neighbor_users)))), axis=0)
+        neighbor_items_total, users_total = self._flatten_neighbors(users, prev_data.user_neigh)
+        neighbor_users_total, items_total = self._flatten_neighbors(items, prev_data.item_neigh)
 
         if 'layerwise' in self.dyn_method:
                   
@@ -303,20 +318,25 @@ class Model(torch.nn.Module):
 
 
                 kd_loss_user = self.condition_info_nce_for_embeddings(u_vectors_prev, u_vectors, weights=weights_1, tau=0.5)
-                user_to_weight = {users[i].item(): weights_1[i].item() for i in range(len(users))}
-                #print('user_to_weight: {}'.format(user_to_weight))
-                wights_1_neigh = torch.tensor([user_to_weight[user.item()] for user in users_total]).to(self._device)
-
-
-                kd_loss_user_neighbor = self.condition_info_nce_for_embeddings(all_items_prev[neighbor_items_total], all_users[users_total], weights=wights_1_neigh, tau=0.5)
+                if len(users_total) > 0:
+                    weights_1_neigh = self._weights_for_owners(users, weights_1, users_total)
+                    kd_loss_user_neighbor = self.condition_info_nce_for_embeddings(all_items_prev[neighbor_items_total], all_users[users_total], weights=weights_1_neigh, tau=0.5)
+                else:
+                    kd_loss_user_neighbor = torch.tensor([0.0], dtype=torch.float32).to(self._device)
 
             else:
                 kd_loss_user = self.condition_info_nce_for_embeddings(u_vectors_prev, u_vectors, weights=None, tau=0.5)
-                kd_loss_user_neighbor = self.condition_info_nce_for_embeddings(all_items_prev[neighbor_items_total], all_users[users_total], weights=None, tau=0.5)
+                if len(users_total) > 0:
+                    kd_loss_user_neighbor = self.condition_info_nce_for_embeddings(all_items_prev[neighbor_items_total], all_users[users_total], weights=None, tau=0.5)
+                else:
+                    kd_loss_user_neighbor = torch.tensor([0.0], dtype=torch.float32).to(self._device)
                 
             # item-side
             kd_loss_item = self.condition_info_nce_for_embeddings(i_vectors_prev, i_vectors, weights=None, tau=0.5)
-            kd_loss_item_neighbor = self.condition_info_nce_for_embeddings(all_users_prev[neighbor_users_total], all_items[items_total], weights=None, tau=0.5)
+            if len(items_total) > 0:
+                kd_loss_item_neighbor = self.condition_info_nce_for_embeddings(all_users_prev[neighbor_users_total], all_items[items_total], weights=None, tau=0.5)
+            else:
+                kd_loss_item_neighbor = torch.tensor([0.0], dtype=torch.float32).to(self._device)
 
 
 
@@ -342,20 +362,25 @@ class Model(torch.nn.Module):
 
 
             kd_loss_user = self.condition_info_nce_for_embeddings(u_vectors_prev, u_vectors, weights=weights_1, tau=0.5)
-            user_to_weight = {users[i].item(): weights_1[i].item() for i in range(len(users))}
-            #print('user_to_weight: {}'.format(user_to_weight))
-            wights_1_neigh = torch.tensor([user_to_weight[user.item()] for user in users_total]).to(self._device)
-
-
-            kd_loss_user_neighbor = self.condition_info_nce_for_embeddings(all_items_prev[neighbor_items_total], all_users[users_total], weights=wights_1_neigh, tau=0.5)
+            if len(users_total) > 0:
+                weights_1_neigh = self._weights_for_owners(users, weights_1, users_total)
+                kd_loss_user_neighbor = self.condition_info_nce_for_embeddings(all_items_prev[neighbor_items_total], all_users[users_total], weights=weights_1_neigh, tau=0.5)
+            else:
+                kd_loss_user_neighbor = torch.tensor([0.0], dtype=torch.float32).to(self._device)
 
         else:
             kd_loss_user = self.condition_info_nce_for_embeddings(u_vectors_prev, u_vectors, weights=None, tau=0.5)
-            kd_loss_user_neighbor = self.condition_info_nce_for_embeddings(all_items_prev[neighbor_items_total], all_users[users_total], weights=None, tau=0.5)
+            if len(users_total) > 0:
+                kd_loss_user_neighbor = self.condition_info_nce_for_embeddings(all_items_prev[neighbor_items_total], all_users[users_total], weights=None, tau=0.5)
+            else:
+                kd_loss_user_neighbor = torch.tensor([0.0], dtype=torch.float32).to(self._device)
             
         # item-side
         kd_loss_item = self.condition_info_nce_for_embeddings(i_vectors_prev, i_vectors, weights=None, tau=0.5)
-        kd_loss_item_neighbor = self.condition_info_nce_for_embeddings(all_users_prev[neighbor_users_total], all_items[items_total], weights=None, tau=0.5)
+        if len(items_total) > 0:
+            kd_loss_item_neighbor = self.condition_info_nce_for_embeddings(all_users_prev[neighbor_users_total], all_items[items_total], weights=None, tau=0.5)
+        else:
+            kd_loss_item_neighbor = torch.tensor([0.0], dtype=torch.float32).to(self._device)
 
         return kd_loss_user, kd_loss_item, kd_loss_user_neighbor, kd_loss_item_neighbor
 
@@ -413,4 +438,3 @@ class Model(torch.nn.Module):
     def count_variables(self) -> int:
         total_parameters = sum(p.numel() for p in self.parameters() if p.requires_grad)
         return total_parameters
-

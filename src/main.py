@@ -41,6 +41,16 @@ def parse_global_args(parser):
     parser.add_argument('--force_train', action='store_true', help='when the param occurs, \
                         train model from scratch instead of reusing exsited model of file')
     parser.add_argument('--eval_step', type=int, default=2)
+    parser.add_argument('--fast_sampler', type=int, default=1,
+                        help='Use batched negative sampling in the DataLoader.')
+    parser.add_argument('--persistent_workers', type=int, default=1,
+                        help='Keep DataLoader workers alive between epochs when num_workers > 0.')
+    parser.add_argument('--prefetch_factor', type=int, default=4,
+                        help='Number of batches prefetched by each DataLoader worker.')
+    parser.add_argument('--eval_batch_size', type=int, default=0,
+                        help='Batch size for evaluation. Defaults to --batch_size when <= 0.')
+    parser.add_argument('--shuffle', type=int, default=1,
+                        help='Shuffle training DataLoader batches.')
     
     return parser
 

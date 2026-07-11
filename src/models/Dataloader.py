@@ -54,7 +54,10 @@ class Dataset(BaseDataset):
         for user_id in hist_user_clicked_list:
             hist_user_clicked_list[user_id] = set(hist_user_clicked_list[user_id])
         self.hist_user_clicked_set = hist_user_clicked_list
+        self.hist_pair_codes = self._build_hist_pair_codes(hist_user_clicked_list)
         self.current_unique_items = np.unique(self.trainItem)
+        self.current_unique_item_set = set(int(item) for item in self.current_unique_items)
+        self.all_items = np.arange(corpus.n_items, dtype=np.int64)
 
         
         # get neighbor set for each item
@@ -68,9 +71,141 @@ class Dataset(BaseDataset):
         return self.train_data.shape[0]
 
     def __getitem__(self, index: int) -> dict:
+        if getattr(self.args, 'fast_sampler', 1):
+            return index
         #current = self._get_feed_dict(index)
         current = self._get_feed_dict_fast(index)
         return current
+
+    def collate_batch(self, indices):
+        indices = np.asarray(indices, dtype=np.int64)
+        batch_data = self.train_data[indices]
+        user_ids = batch_data[:, 0].astype(np.int64, copy=False)
+        pos_items = batch_data[:, 1].astype(np.int64, copy=False)
+        neg_items = self._sample_neg_items_batch(user_ids)
+
+        item_ids = np.empty((len(indices), self.args.num_neg + 1), dtype=np.int64)
+        item_ids[:, 0] = pos_items
+        item_ids[:, 1:] = neg_items
+
+        return {
+            'user_id': torch.from_numpy(user_ids.reshape(-1, 1)),
+            'item_id': torch.from_numpy(item_ids),
+        }
+
+    def _build_hist_pair_codes(self, hist_user_clicked_list):
+        user_chunks, item_chunks = [], []
+        for user_id, item_set in hist_user_clicked_list.items():
+            if len(item_set) == 0:
+                continue
+            items = np.fromiter(item_set, dtype=np.int64)
+            user_chunks.append(np.full(len(items), int(user_id), dtype=np.int64))
+            item_chunks.append(items)
+
+        if not user_chunks:
+            return np.empty(0, dtype=np.int64)
+
+        users = np.concatenate(user_chunks)
+        items = np.concatenate(item_chunks)
+        return np.sort(users * np.int64(self.corpus.n_items) + items)
+
+    def _hist_clicked_mask_batch(self, user_ids, candidate_items):
+        if self.hist_pair_codes.size == 0:
+            return np.zeros(candidate_items.shape, dtype=bool)
+
+        codes = user_ids.astype(np.int64)[:, None] * np.int64(self.corpus.n_items)
+        codes = (codes + candidate_items.astype(np.int64)).reshape(-1)
+        positions = np.searchsorted(self.hist_pair_codes, codes)
+        in_bounds = positions < self.hist_pair_codes.size
+
+        clicked = np.zeros(codes.shape, dtype=bool)
+        clicked[in_bounds] = self.hist_pair_codes[positions[in_bounds]] == codes[in_bounds]
+        return clicked.reshape(candidate_items.shape)
+
+    @staticmethod
+    def _row_duplicate_mask(values):
+        if values.shape[1] <= 1:
+            return np.zeros(values.shape, dtype=bool)
+
+        order = np.argsort(values, axis=1, kind='mergesort')
+        sorted_values = np.take_along_axis(values, order, axis=1)
+        duplicate_sorted = np.zeros(values.shape, dtype=bool)
+        duplicate_sorted[:, 1:] = sorted_values[:, 1:] == sorted_values[:, :-1]
+
+        duplicate = np.zeros(values.shape, dtype=bool)
+        np.put_along_axis(duplicate, order, duplicate_sorted, axis=1)
+        return duplicate
+
+    def _sample_neg_items_batch(self, user_ids):
+        num_neg = self.args.num_neg
+        pool = self.current_unique_items
+        if len(pool) == 0:
+            raise ValueError('Cannot sample negatives from an empty item pool')
+
+        batch_size = len(user_ids)
+        neg_items = np.full((batch_size, num_neg), -1, dtype=np.int64)
+        selected_counts = np.zeros(batch_size, dtype=np.int64)
+        candidate_width = max(num_neg * 16, 64)
+
+        for _ in range(3):
+            active_rows = np.flatnonzero(selected_counts < num_neg)
+            if len(active_rows) == 0:
+                break
+
+            active_users = user_ids[active_rows]
+            candidate_idx = np.random.randint(0, len(pool), size=(len(active_rows), candidate_width))
+            candidates = pool[candidate_idx]
+
+            valid = ~self._hist_clicked_mask_batch(active_users, candidates)
+            valid &= ~self._row_duplicate_mask(candidates)
+
+            existing = neg_items[active_rows]
+            valid &= ~(candidates[:, :, None] == existing[:, None, :]).any(axis=2)
+
+            ranks = np.cumsum(valid, axis=1) + selected_counts[active_rows, None]
+            take = valid & (ranks <= num_neg)
+            local_rows, cols = np.nonzero(take)
+            if len(local_rows) == 0:
+                continue
+
+            target_rows = active_rows[local_rows]
+            target_cols = ranks[local_rows, cols] - 1
+            neg_items[target_rows, target_cols] = candidates[local_rows, cols]
+            selected_counts += np.bincount(target_rows, minlength=batch_size)
+
+        for row in np.flatnonzero(selected_counts < num_neg):
+            user_id = int(user_ids[row])
+            clicked_set = self.hist_user_clicked_set.get(user_id, set())
+            valid_pool = np.array(
+                [item for item in pool if int(item) not in clicked_set],
+                dtype=np.int64,
+            )
+            if len(valid_pool) == 0:
+                raise ValueError(f'No available negative items for user {user_id}')
+
+            if len(valid_pool) < num_neg:
+                repeats = num_neg // len(valid_pool)
+                remainder = num_neg % len(valid_pool)
+                fill = np.tile(valid_pool, repeats)
+                neg_items[row, :len(fill)] = fill
+                if remainder:
+                    neg_items[row, repeats * len(valid_pool):] = np.random.choice(
+                        valid_pool,
+                        size=remainder,
+                        replace=False,
+                    )
+                continue
+
+            chosen = set(int(item) for item in neg_items[row, :selected_counts[row]])
+            while selected_counts[row] < num_neg:
+                item = int(valid_pool[np.random.randint(0, len(valid_pool))])
+                if item in chosen:
+                    continue
+                neg_items[row, selected_counts[row]] = item
+                chosen.add(item)
+                selected_counts[row] += 1
+
+        return neg_items
 
     def _get_feed_dict(self, index: int) -> dict:
 

@@ -58,6 +58,9 @@ class Runner(object):
         self.optimizer_name = args.optimizer
         self.num_workers = args.num_workers
         self.pin_memory = args.pin_memory
+        self.persistent_workers = getattr(args, 'persistent_workers', 1)
+        self.prefetch_factor = getattr(args, 'prefetch_factor', 4)
+        self.shuffle = bool(getattr(args, 'shuffle', 1))
         self.result_file = args.result_file
         self.dyn_method = args.dyn_method
         self.time = None  # will store [start_time, last_step_time]
@@ -198,13 +201,13 @@ class Runner(object):
         logging.info('dyn_method: {}'.format(self.dyn_method))
         if 'finetune' in self.dyn_method or 'newtrain' in self.dyn_method:
             num_epoch = self.tepoch
-            shuffle = True
+            shuffle = self.shuffle
             if snap_idx == 0:
                 num_epoch = self.epoch
-                shuffle = True
+                shuffle = self.shuffle
         elif 'fulltrain' in self.dyn_method or 'pretrain' in self.dyn_method:
             num_epoch = self.epoch
-            shuffle = True
+            shuffle = self.shuffle
 
         cnt = 0
         best_recall = 0
@@ -247,7 +250,6 @@ class Runner(object):
                 #v_results = Inference.Test(args, model, corpus, 'val', snap_idx)
                 v_results = Inference.Test_excl_cold(args, model, val_loads, hist_loads, lite = True)
                 # gc.collect()
-                torch.cuda.empty_cache()
                 #Inference.print_results(None, v_results, None)
                 if v_results[a][b] > best_recall:
                     best_epoch = epoch+1
@@ -272,15 +274,23 @@ class Runner(object):
         # gc.collect()
         # torch.cuda.empty_cache()
 
-        dl = DataLoader(data, batch_size=self.batch_size, shuffle=shuffle, num_workers=self.num_workers, pin_memory=self.pin_memory)
+        dl = utils.build_data_loader(
+            data,
+            batch_size=self.batch_size,
+            shuffle=shuffle,
+            num_workers=self.num_workers,
+            pin_memory=self.pin_memory,
+            persistent_workers=self.persistent_workers,
+            prefetch_factor=self.prefetch_factor,
+        )
         
         flag = 0
         for current in dl:
             #current = utils.batch_to_gpu(utils.squeeze_dict(current), model._device)
             current = utils.batch_to_gpu(current, model._device)
             current['batch_size'] = len(current['user_id'])
-            prediction, total_loss = self.train_recommender_vanilla(dl,model, current, prev_data,snap_idx)
-            flag = np.isnan(prediction).any()
+            total_loss = self.train_recommender_vanilla(dl,model, current, prev_data,snap_idx)
+            flag = np.isnan(total_loss).any()
             if flag: 
                 break
            
@@ -291,7 +301,6 @@ class Runner(object):
         # Train recommender
         model.train()
         # Get recommender's prediction and loss from the ``current'' data at t
-        prediction = model(current['user_id'], current['item_id'])
         #u_ids, i_ids, prev_data, data, snap_idx,reduction='mean'
         #self, data, prev_data, snap_idx,reduction
         if self.stream_frequency:
@@ -306,5 +315,4 @@ class Runner(object):
         model.optimizer.step()
 
 
-        return  prediction.cpu().data.numpy(), total_loss.cpu().data.numpy()
-
+        return total_loss.detach().cpu().numpy()

@@ -147,7 +147,7 @@ def Test_group(args, model, corpus, data_type, data_idx, group_files):
             e.g., {"dynamic": "dynamic_users.txt", "static": "static_users.txt", "intermediate": "intermediate_users.txt"}
     """
 
-    batch_size = args.batch_size
+    batch_size = args.eval_batch_size if getattr(args, 'eval_batch_size', 0) > 0 else args.batch_size
     model.eval()
 
     # Load user groups from files
@@ -215,16 +215,19 @@ def Test_group(args, model, corpus, data_type, data_idx, group_files):
                 item_id = torch.tensor(np.arange(corpus.n_items), dtype=torch.int64).to(model._device)
 
                 scores = model.infer_user_scores(user_id, item_id)
-                scores = scores.cpu().numpy()
 
                 exclude_index = []
                 exclude_items = []
                 for i, items in enumerate(all_pos):
                     exclude_index.extend([i] * len(items))
                     exclude_items.extend(items)
-                scores[exclude_index, exclude_items] = -np.inf
+                if exclude_index:
+                    scores[
+                        torch.tensor(exclude_index, dtype=torch.long, device=model._device),
+                        torch.tensor(exclude_items, dtype=torch.long, device=model._device),
+                    ] = -torch.inf
 
-                _, rating_K = torch.topk(torch.tensor(scores), k=max_K)
+                _, rating_K = torch.topk(scores, k=max_K, dim=1)
 
                 users_list.append(batch_users)
                 rating_list.extend(rating_K.cpu())
@@ -238,7 +241,7 @@ def Test_group(args, model, corpus, data_type, data_idx, group_files):
 
 # inference incl. cold user & cold item, their embedding are random.
 def Test(args, model, corpus, data_type, data_idx):
-    batch_size = args.batch_size
+    batch_size = args.eval_batch_size if getattr(args, 'eval_batch_size', 0) > 0 else args.batch_size
     model.eval()
 
     #data_type = 'val'
@@ -299,16 +302,19 @@ def Test(args, model, corpus, data_type, data_idx):
             item_id = torch.tensor(np.arange(corpus.n_items), dtype=torch.int64).to(model._device)
 
             scores = model.infer_user_scores(user_id, item_id)
-            scores = scores.cpu().numpy()
 
             exclude_index = []
             exclude_items = []
             for i, items in enumerate(all_pos):
                 exclude_index.extend([i] * len(items))
                 exclude_items.extend(items)
-            scores[exclude_index, exclude_items] = -np.inf
+            if exclude_index:
+                scores[
+                    torch.tensor(exclude_index, dtype=torch.long, device=model._device),
+                    torch.tensor(exclude_items, dtype=torch.long, device=model._device),
+                ] = -torch.inf
 
-            _, rating_K = torch.topk(torch.tensor(scores), k=max_K)
+            _, rating_K = torch.topk(scores, k=max_K, dim=1)
             
             users_list.append(batch_users)
             rating_list.extend(rating_K.cpu())
@@ -326,7 +332,7 @@ def Test(args, model, corpus, data_type, data_idx):
 
 # inference excl. cold user & cold item
 def Test_excl_cold(args, model, test_loads, hist_loads, lite = False):
-    batch_size = args.batch_size
+    batch_size = args.eval_batch_size if getattr(args, 'eval_batch_size', 0) > 0 else args.batch_size
     model.eval()
     device = model._device
 
