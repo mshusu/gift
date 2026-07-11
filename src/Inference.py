@@ -446,8 +446,9 @@ def Test_excl_cold_vectorized(args, model, test_loads, hist_loads, lite=False):
         item_mapping = torch.full((max_item_id + 1,), -1, dtype=torch.long, device=device)
         item_mapping[target_items_tensor] = torch.arange(len(hist_unique_items), device=device)
 
+        valid_test_user_clicked_set = {u: set(test_user_clicked_list[u]) for u in valid_test_users}
         test_item_counts = np.array(
-            [len(test_user_clicked_list[u]) for u in valid_test_users],
+            [len(valid_test_user_clicked_set[u]) for u in valid_test_users],
             dtype=np.int64,
         )
         hist_mask_rows, hist_mask_cols = _flatten_user_item_pairs(
@@ -468,7 +469,7 @@ def Test_excl_cold_vectorized(args, model, test_loads, hist_loads, lite=False):
 
         truth_codes = []
         for row, user in enumerate(valid_test_users):
-            items = np.asarray(test_user_clicked_list[user], dtype=np.int64)
+            items = np.asarray(list(valid_test_user_clicked_set[user]), dtype=np.int64)
             if len(items) == 0:
                 continue
             truth_codes.append(row * np.int64(model.item_num) + items)
@@ -536,6 +537,9 @@ def Test_excl_cold_vectorized(args, model, test_loads, hist_loads, lite=False):
 
 def Test_excl_cold_selected(args, model, test_loads, hist_loads, lite=False, label=''):
     if getattr(args, 'compare_vectorized_eval', 0):
+        start_msg = f'[EvalCompare:{label}] start lite={lite}'
+        print(start_msg, flush=True)
+        logging.info(start_msg)
         old_results = Test_excl_cold(args, model, test_loads, hist_loads, lite=lite)
         vec_results = Test_excl_cold_vectorized(args, model, test_loads, hist_loads, lite=lite)
         diffs = []
@@ -548,13 +552,13 @@ def Test_excl_cold_selected(args, model, test_loads, hist_loads, lite=False, lab
         _, hist_users_list, hist_unique_items = hist_loads
         hist_users_set = set(hist_users_list)
         valid_users = [u for u in testUsers if u in hist_users_set]
-        gt_pairs = sum(len(test_user_clicked_list[u]) for u in valid_users)
+        gt_pairs = sum(len(set(test_user_clicked_list[u])) for u in valid_users)
         msg = (
             f'[EvalCompare:{label}] lite={lite} valid_users={len(valid_users)} '
             f'target_items={len(hist_unique_items)} gt_pairs={gt_pairs} '
             f'max_abs_diff={max_diff:.8f} old={old_results} vectorized={vec_results}'
         )
-        print(msg)
+        print(msg, flush=True)
         logging.info(msg)
         return old_results
 

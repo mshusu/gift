@@ -249,6 +249,9 @@ if __name__ == '__main__':
     parser = model_name.parse_model_args(parser)
     #parser = tester_name.parse_tester_args(parser)
     args, extras = parser.parse_known_args()
+    if extras:
+        print(f'Warning: ignored unknown CLI args: {extras}', flush=True)
+    args.unknown_cli_args = extras
 
     if init_args.dyn_method == 'finetune':
         pass
@@ -297,5 +300,15 @@ if __name__ == '__main__':
     
     logging.basicConfig(filename=args.log_file, level=args.verbose)
     logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
+    if args.unknown_cli_args:
+        logging.warning('Ignored unknown CLI args: {}'.format(args.unknown_cli_args))
+    if getattr(args, 'compare_vectorized_eval', 0):
+        msg = 'Vectorized eval comparison enabled: old evaluator will be returned, vectorized evaluator will be checked.'
+        print(msg, flush=True)
+        logging.info(msg)
+    elif getattr(args, 'vectorized_eval', 0):
+        msg = 'Vectorized eval enabled.'
+        print(msg, flush=True)
+        logging.info(msg)
     logging.info(log_file_name1+'__'+log_file_name2)
     main()
