@@ -51,6 +51,10 @@ def parse_global_args(parser):
                         help='Batch size for evaluation. Defaults to --batch_size when <= 0.')
     parser.add_argument('--shuffle', type=int, default=1,
                         help='Shuffle training DataLoader batches.')
+    parser.add_argument('--vectorized_eval', type=int, default=0,
+                        help='Use vectorized Test_excl_cold implementation.')
+    parser.add_argument('--compare_vectorized_eval', type=int, default=0,
+                        help='Run old and vectorized Test_excl_cold and print metric diffs.')
     
     return parser
 

@@ -53,8 +53,8 @@ class Runner_PISA:
     
     def write_results_excl_cold(self, model, args, snap_idx, test_loads, val_loads, hist_loads, option=''):
         """Write validation and test results to files and save metrics in JSON format."""
-        v_results = Inference.Test_excl_cold(args, model, test_loads, hist_loads)
-        t_results = Inference.Test_excl_cold(args, model, val_loads, hist_loads)
+        v_results = Inference.Test_excl_cold_selected(args, model, test_loads, hist_loads, label='test')
+        t_results = Inference.Test_excl_cold_selected(args, model, val_loads, hist_loads, label='val')
         logging.info("Trained model testing")
 
         # Save validation results
@@ -177,7 +177,7 @@ class Runner_PISA:
             patience_start_step = 0 # pisa default value 20
             if epoch >= 0 and (epoch + 1) % eval_step == 0:
                 #v_results = Inference.Test(args, model, corpus, 'val', snap_idx)
-                v_results = Inference.Test_excl_cold(args, model, val_loads, hist_loads, lite = True)
+                v_results = Inference.Test_excl_cold_selected(args, model, val_loads, hist_loads, lite=True, label='val-lite')
                 # gc.collect()
                 if v_results[0][1] > best_recall:
                     best_epoch = epoch + 1

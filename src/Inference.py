@@ -395,6 +395,175 @@ def Test_excl_cold(args, model, test_loads, hist_loads, lite = False):
         return recall, NDCG, MRR, precision
 
 
+def _pairs_overflow(max_left, right_size, max_right):
+    int64_max = np.iinfo(np.int64).max
+    return max_left > (int64_max - max_right) // right_size
+
+
+def _flatten_user_item_pairs(user_items, users, item_mapping, device):
+    rows = []
+    cols = []
+    for row, user in enumerate(users):
+        items = user_items.get(user, [])
+        if len(items) == 0:
+            continue
+        mapped = item_mapping[torch.as_tensor(items, dtype=torch.long, device=device)]
+        mapped = mapped[mapped != -1]
+        if len(mapped) == 0:
+            continue
+        rows.append(torch.full((len(mapped),), row, dtype=torch.long, device=device))
+        cols.append(mapped)
+
+    if not rows:
+        empty = torch.empty(0, dtype=torch.long, device=device)
+        return empty, empty
+    return torch.cat(rows), torch.cat(cols)
+
+
+def Test_excl_cold_vectorized(args, model, test_loads, hist_loads, lite=False):
+    batch_size = args.eval_batch_size if getattr(args, 'eval_batch_size', 0) > 0 else args.batch_size
+    model.eval()
+    device = model._device
+
+    test_user_clicked_list, testUsers, _ = test_loads
+    hist_user_clicked_list, hist_users_list, hist_unique_items = hist_loads
+
+    with torch.no_grad():
+        all_users_emb, all_items_emb = model.computer()
+
+        target_items_tensor = torch.from_numpy(hist_unique_items).to(device)
+        target_items_emb = all_items_emb[target_items_tensor]
+
+        hist_users_set = set(hist_users_list)
+        valid_test_users = [u for u in testUsers if u in hist_users_set]
+        if len(valid_test_users) == 0:
+            return [], None, None, None
+
+        Ks = [10, 20, 50, 100]
+        max_K = max(Ks)
+
+        max_item_id = int(hist_unique_items.max())
+        item_mapping = torch.full((max_item_id + 1,), -1, dtype=torch.long, device=device)
+        item_mapping[target_items_tensor] = torch.arange(len(hist_unique_items), device=device)
+
+        test_item_counts = np.array(
+            [len(test_user_clicked_list[u]) for u in valid_test_users],
+            dtype=np.int64,
+        )
+        hist_mask_rows, hist_mask_cols = _flatten_user_item_pairs(
+            hist_user_clicked_list,
+            valid_test_users,
+            item_mapping,
+            device,
+        )
+
+        overflow = _pairs_overflow(
+            max_left=max(len(valid_test_users) - 1, 0),
+            right_size=model.item_num,
+            max_right=model.item_num - 1,
+        )
+        if overflow:
+            logging.warning('Vectorized eval pair encoding would overflow int64; falling back to Test_excl_cold')
+            return Test_excl_cold(args, model, test_loads, hist_loads, lite=lite)
+
+        truth_codes = []
+        for row, user in enumerate(valid_test_users):
+            items = np.asarray(test_user_clicked_list[user], dtype=np.int64)
+            if len(items) == 0:
+                continue
+            truth_codes.append(row * np.int64(model.item_num) + items)
+        truth_codes = np.sort(np.concatenate(truth_codes)) if truth_codes else np.empty(0, dtype=np.int64)
+
+        rating_rows = []
+        rating_items = []
+        for start in range(0, len(valid_test_users), batch_size):
+            end = min(start + batch_size, len(valid_test_users))
+            batch_users = valid_test_users[start:end]
+            user_idx = torch.tensor(batch_users, dtype=torch.long, device=device)
+            scores = torch.matmul(all_users_emb[user_idx], target_items_emb.t())
+
+            mask = (hist_mask_rows >= start) & (hist_mask_rows < end)
+            if mask.any():
+                scores[hist_mask_rows[mask] - start, hist_mask_cols[mask]] = -1e9
+
+            _, col_indices = torch.topk(scores, k=max_K, dim=1)
+            rating_items.append(target_items_tensor[col_indices].cpu().numpy())
+            row_ids = np.arange(start, end, dtype=np.int64)[:, None]
+            rating_rows.append(np.broadcast_to(row_ids, (end - start, max_K)).copy())
+
+        pred_items = np.vstack(rating_items)
+        pred_rows = np.vstack(rating_rows)
+        pred_codes = pred_rows * np.int64(model.item_num) + pred_items.astype(np.int64)
+        positions = np.searchsorted(truth_codes, pred_codes.reshape(-1))
+        in_bounds = positions < len(truth_codes)
+        hits_flat = np.zeros(pred_codes.size, dtype=np.int8)
+        hits_flat[in_bounds] = truth_codes[positions[in_bounds]] == pred_codes.reshape(-1)[in_bounds]
+        hits = hits_flat.reshape(pred_codes.shape)
+
+        hit_cumsum = np.cumsum(hits, axis=1)
+        results = {'recall': [], 'ndcg': [], 'mrr': [], 'precision': []}
+
+        if lite:
+            for k in Ks:
+                recalls = hit_cumsum[:, k - 1] / test_item_counts
+                results['recall'].append(round(float(np.mean(recalls)), 4))
+            return results['recall'], None, None, None
+
+        weights = 1.0 / np.log2(np.arange(2, max_K + 2))
+        dcg_matrix = np.cumsum(hits * weights, axis=1)
+        weights_cumsum = np.cumsum(weights)
+
+        for k in Ks:
+            k_idx = k - 1
+            recalls = hit_cumsum[:, k_idx] / test_item_counts
+            precisions = hit_cumsum[:, k_idx] / k
+
+            first_hit_idx = np.argmax(hits[:, :k], axis=1)
+            has_hit = np.max(hits[:, :k], axis=1) > 0
+            mrrs = np.where(has_hit, 1.0 / (first_hit_idx + 1), 0.0)
+
+            idcg_counts = np.minimum(k, test_item_counts)
+            idcgs = weights_cumsum[idcg_counts - 1]
+            ndcgs = dcg_matrix[:, k_idx] / idcgs
+
+            results['recall'].append(round(float(np.mean(recalls)), 4))
+            results['ndcg'].append(round(float(np.mean(ndcgs)), 4))
+            results['mrr'].append(round(float(np.mean(mrrs)), 4))
+            results['precision'].append(round(float(np.mean(precisions)), 4))
+
+        return results['recall'], results['ndcg'], results['mrr'], results['precision']
+
+
+def Test_excl_cold_selected(args, model, test_loads, hist_loads, lite=False, label=''):
+    if getattr(args, 'compare_vectorized_eval', 0):
+        old_results = Test_excl_cold(args, model, test_loads, hist_loads, lite=lite)
+        vec_results = Test_excl_cold_vectorized(args, model, test_loads, hist_loads, lite=lite)
+        diffs = []
+        for old_metric, vec_metric in zip(old_results, vec_results):
+            if old_metric is None or vec_metric is None:
+                continue
+            diffs.extend(np.abs(np.asarray(old_metric) - np.asarray(vec_metric)).tolist())
+        max_diff = max(diffs) if diffs else 0.0
+        test_user_clicked_list, testUsers, _ = test_loads
+        _, hist_users_list, hist_unique_items = hist_loads
+        hist_users_set = set(hist_users_list)
+        valid_users = [u for u in testUsers if u in hist_users_set]
+        gt_pairs = sum(len(test_user_clicked_list[u]) for u in valid_users)
+        msg = (
+            f'[EvalCompare:{label}] lite={lite} valid_users={len(valid_users)} '
+            f'target_items={len(hist_unique_items)} gt_pairs={gt_pairs} '
+            f'max_abs_diff={max_diff:.8f} old={old_results} vectorized={vec_results}'
+        )
+        print(msg)
+        logging.info(msg)
+        return old_results
+
+    if getattr(args, 'vectorized_eval', 0):
+        return Test_excl_cold_vectorized(args, model, test_loads, hist_loads, lite=lite)
+
+    return Test_excl_cold(args, model, test_loads, hist_loads, lite=lite)
+
+
 def print_results(loss, valid_result, test_result):
     result_str = ''
     """output the evaluation results."""
