@@ -4,6 +4,14 @@ import os
 from utils import utils
 import math
 import logging
+from time import perf_counter
+
+
+def _sync_if_cuda(device):
+    if device is not None and torch.cuda.is_available():
+        device = torch.device(device)
+        if device.type == 'cuda':
+            torch.cuda.synchronize(device)
 
 def computeTopNAccuracy(GroundTruth, predictedIndices, topN):
     precision = [] 
@@ -546,9 +554,33 @@ def Test_excl_cold_selected(args, model, test_loads, hist_loads, lite=False, lab
         had_compare_active = hasattr(args, '_eval_compare_active')
         previous_compare_active = getattr(args, '_eval_compare_active', False)
         args._eval_compare_active = True
+        order_num = int(np.random.randint(0, 2))
+        order = 'old_first' if order_num % 2 else 'vectorized_first'
         try:
-            old_results = Test_excl_cold(args, model, test_loads, hist_loads, lite=lite)
-            vec_results = Test_excl_cold_vectorized(args, model, test_loads, hist_loads, lite=lite)
+            if order_num % 2:
+                _sync_if_cuda(getattr(model, '_device', None))
+                old_start = perf_counter()
+                old_results = Test_excl_cold(args, model, test_loads, hist_loads, lite=lite)
+                _sync_if_cuda(getattr(model, '_device', None))
+                old_time = perf_counter() - old_start
+
+                _sync_if_cuda(getattr(model, '_device', None))
+                vec_start = perf_counter()
+                vec_results = Test_excl_cold_vectorized(args, model, test_loads, hist_loads, lite=lite)
+                _sync_if_cuda(getattr(model, '_device', None))
+                vec_time = perf_counter() - vec_start
+            else:
+                _sync_if_cuda(getattr(model, '_device', None))
+                vec_start = perf_counter()
+                vec_results = Test_excl_cold_vectorized(args, model, test_loads, hist_loads, lite=lite)
+                _sync_if_cuda(getattr(model, '_device', None))
+                vec_time = perf_counter() - vec_start
+
+                _sync_if_cuda(getattr(model, '_device', None))
+                old_start = perf_counter()
+                old_results = Test_excl_cold(args, model, test_loads, hist_loads, lite=lite)
+                _sync_if_cuda(getattr(model, '_device', None))
+                old_time = perf_counter() - old_start
         finally:
             if had_compare_active:
                 args._eval_compare_active = previous_compare_active
@@ -565,9 +597,13 @@ def Test_excl_cold_selected(args, model, test_loads, hist_loads, lite=False, lab
         hist_users_set = set(hist_users_list)
         valid_users = [u for u in testUsers if u in hist_users_set]
         gt_pairs = sum(len(set(test_user_clicked_list[u])) for u in valid_users)
+        speedup = old_time / vec_time if vec_time > 0 else float('inf')
         msg = (
             f'[EvalCompare:{label}] lite={lite} valid_users={len(valid_users)} '
             f'target_items={len(hist_unique_items)} gt_pairs={gt_pairs} '
+            f'order_num={order_num} order={order} '
+            f'old_time={old_time:.4f}s vectorized_time={vec_time:.4f}s '
+            f'speedup={speedup:.2f}x '
             f'max_abs_diff={max_diff:.8f} old={old_results} vectorized={vec_results}'
         )
         print(msg, flush=True)
