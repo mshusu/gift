@@ -127,6 +127,10 @@ def main():
     logging.info('Test instances: {}'.format(corpus.n_test_batches))
     logging.info('Snap boundaries: {}'.format(corpus.snap_boundaries + [corpus.dataset_size]))
 
+    if args.only_data_preprocess:
+        logging.info("This is only for data preprocess: loading dataset, spliting into data blocks, writing to disk")
+        sys.exit()
+
     # Run model 
     runner = runner_name(args, corpus) # autually trainer
     # data_dict = dict()
@@ -247,6 +251,7 @@ if __name__ == '__main__':
     parser = reader_name.parse_data_args(parser)
     parser = runner_name.parse_runner_args(parser)
     parser = model_name.parse_model_args(parser)
+    parser.add_argument('--only_data_preprocess', type=int, default=0, help='only dataset pre process, no train/val/test')
     #parser = tester_name.parse_tester_args(parser)
     args, extras = parser.parse_known_args()
     if extras:
@@ -265,6 +270,8 @@ if __name__ == '__main__':
     
     log_args1 = [args.dataset, args.s_fname]
     log_args2 = [init_args.model_name, init_args.dyn_method]
+    if hasattr(args, 'strefreq_alpha'):
+        log_args2.append(str(args.strefreq_alpha))
     log_args3 = []
 
 
@@ -311,4 +318,21 @@ if __name__ == '__main__':
         print(msg, flush=True)
         logging.info(msg)
     logging.info(log_file_name1+'__'+log_file_name2)
+    
     main()
+
+    # 
+    if hasattr(args, 'strefreq_alpha'):
+        # print metric, remove model file to save space
+        print(f"\n alpha = {args.strefreq_alpha}")
+        print(f"\n test res directory = {args.test_result_file}")
+        testres_fnames = ['_test_mean', '_test_mean-0.5', '_test_mean-0.2', '_test_mean-0.1']
+        for filename in testres_fnames:
+                    #print("@@@@ Gift@i @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+                    sp = ('-' * 2)
+                    print(f' Gift ' + filename.replace('_test_', ''))
+                    cmdc = f"cat {args.test_result_file}/{filename}"
+                    os.system(cmdc)
+        model_dir = args.test_result_file.replace("test_result", "model")
+        if os.path.exists(model_dir):
+            shutil.rmtree(model_dir)
