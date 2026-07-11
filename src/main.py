@@ -42,7 +42,7 @@ def parse_global_args(parser):
                         train model from scratch instead of reusing exsited model of file')
     parser.add_argument('--eval_step', type=int, default=2)
     parser.add_argument('--fast_sampler', type=int, default=1,
-                        help='Use batched negative sampling in the DataLoader.')
+                        help='Use batched negative sampling in the DataLoader. Enabled by default.')
     parser.add_argument('--persistent_workers', type=int, default=1,
                         help='Keep DataLoader workers alive between epochs when num_workers > 0.')
     parser.add_argument('--prefetch_factor', type=int, default=4,

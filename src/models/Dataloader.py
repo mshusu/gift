@@ -17,6 +17,7 @@ class Dataset(BaseDataset):
         self.corpus = corpus  # reader object reference
         self._device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         self.args = args
+        self._use_fast_collate = False
         self.time_idx = data_idx
         self.data_type = data_type
 
@@ -71,7 +72,7 @@ class Dataset(BaseDataset):
         return self.train_data.shape[0]
 
     def __getitem__(self, index: int) -> dict:
-        if getattr(self.args, 'fast_sampler', 1):
+        if getattr(self.args, 'fast_sampler', 1) and self._use_fast_collate:
             return index
         #current = self._get_feed_dict(index)
         current = self._get_feed_dict_fast(index)

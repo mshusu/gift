@@ -62,6 +62,11 @@ def write_interactions_to_file(filename, data):
             f.writelines('{}\t{}\n'.format(d[0],d[1]))
 
 def batch_to_gpu(batch: dict, device) -> dict:
+    if not isinstance(batch, dict):
+        raise TypeError(
+            "Expected DataLoader to return a batch dict. "
+            "If fast_sampler is enabled, construct loaders with utils.build_data_loader()."
+        )
     non_blocking = getattr(device, 'type', str(device)) == 'cuda'
     for c in batch:
         if type(batch[c]) is torch.Tensor:
@@ -77,7 +82,10 @@ def build_data_loader(dataset, batch_size, shuffle, num_workers, pin_memory,
         'num_workers': num_workers,
         'pin_memory': bool(pin_memory),
     }
-    if getattr(dataset.args, 'fast_sampler', 1) and hasattr(dataset, 'collate_batch'):
+    use_fast_collate = getattr(dataset.args, 'fast_sampler', 1) and hasattr(dataset, 'collate_batch')
+    if hasattr(dataset, '_use_fast_collate'):
+        dataset._use_fast_collate = bool(use_fast_collate)
+    if use_fast_collate:
         loader_kwargs['collate_fn'] = dataset.collate_batch
     if num_workers > 0:
         loader_kwargs['persistent_workers'] = bool(persistent_workers)
