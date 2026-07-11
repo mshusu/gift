@@ -414,21 +414,37 @@ def _pairs_overflow(max_left, right_size, max_right):
 def _flatten_user_item_pairs(user_items, users, item_mapping, device):
     rows = []
     cols = []
+    row_offsets = [0]
+    offset = 0
+    max_item_id = len(item_mapping) - 1
     for row, user in enumerate(users):
         items = user_items.get(user, [])
         if len(items) == 0:
+            row_offsets.append(offset)
             continue
-        mapped = item_mapping[torch.as_tensor(items, dtype=torch.long, device=device)]
+        items = np.asarray(items, dtype=np.int64)
+        items = items[(items >= 0) & (items <= max_item_id)]
+        if len(items) == 0:
+            row_offsets.append(offset)
+            continue
+        mapped = item_mapping[items]
         mapped = mapped[mapped != -1]
         if len(mapped) == 0:
+            row_offsets.append(offset)
             continue
-        rows.append(torch.full((len(mapped),), row, dtype=torch.long, device=device))
+        rows.append(np.full(len(mapped), row, dtype=np.int64))
         cols.append(mapped)
+        offset += len(mapped)
+        row_offsets.append(offset)
 
     if not rows:
         empty = torch.empty(0, dtype=torch.long, device=device)
-        return empty, empty
-    return torch.cat(rows), torch.cat(cols)
+        return empty, empty, np.asarray(row_offsets, dtype=np.int64)
+    return (
+        torch.as_tensor(np.concatenate(rows), dtype=torch.long, device=device),
+        torch.as_tensor(np.concatenate(cols), dtype=torch.long, device=device),
+        np.asarray(row_offsets, dtype=np.int64),
+    )
 
 
 def Test_excl_cold_vectorized(args, model, test_loads, hist_loads, lite=False):
@@ -454,15 +470,15 @@ def Test_excl_cold_vectorized(args, model, test_loads, hist_loads, lite=False):
         max_K = max(Ks)
 
         max_item_id = int(hist_unique_items.max())
-        item_mapping = torch.full((max_item_id + 1,), -1, dtype=torch.long, device=device)
-        item_mapping[target_items_tensor] = torch.arange(len(hist_unique_items), device=device)
+        item_mapping = np.full(max_item_id + 1, -1, dtype=np.int64)
+        item_mapping[hist_unique_items] = np.arange(len(hist_unique_items), dtype=np.int64)
 
         valid_test_user_clicked_set = {u: set(test_user_clicked_list[u]) for u in valid_test_users}
         test_item_counts = np.array(
             [len(valid_test_user_clicked_set[u]) for u in valid_test_users],
             dtype=np.int64,
         )
-        hist_mask_rows, hist_mask_cols = _flatten_user_item_pairs(
+        hist_mask_rows, hist_mask_cols, hist_mask_offsets = _flatten_user_item_pairs(
             hist_user_clicked_list,
             valid_test_users,
             item_mapping,
@@ -486,25 +502,28 @@ def Test_excl_cold_vectorized(args, model, test_loads, hist_loads, lite=False):
             truth_codes.append(row * np.int64(model.item_num) + items)
         truth_codes = np.sort(np.concatenate(truth_codes)) if truth_codes else np.empty(0, dtype=np.int64)
 
-        rating_rows = []
-        rating_items = []
-        for start in range(0, len(valid_test_users), batch_size):
-            end = min(start + batch_size, len(valid_test_users))
-            batch_users = valid_test_users[start:end]
-            user_idx = torch.tensor(batch_users, dtype=torch.long, device=device)
+        num_valid_users = len(valid_test_users)
+        valid_test_users_tensor = torch.as_tensor(valid_test_users, dtype=torch.long, device=device)
+        pred_items = np.empty((num_valid_users, max_K), dtype=np.int64)
+        for start in range(0, num_valid_users, batch_size):
+            end = min(start + batch_size, num_valid_users)
+            user_idx = valid_test_users_tensor[start:end]
             scores = torch.matmul(all_users_emb[user_idx], target_items_emb.t())
 
-            mask = (hist_mask_rows >= start) & (hist_mask_rows < end)
-            if mask.any():
-                scores[hist_mask_rows[mask] - start, hist_mask_cols[mask]] = -1e9
+            mask_start = hist_mask_offsets[start]
+            mask_end = hist_mask_offsets[end]
+            if mask_end > mask_start:
+                batch_mask_rows = hist_mask_rows[mask_start:mask_end] - start
+                batch_mask_cols = hist_mask_cols[mask_start:mask_end]
+                scores[batch_mask_rows, batch_mask_cols] = -1e9
 
             _, col_indices = torch.topk(scores, k=max_K, dim=1)
-            rating_items.append(target_items_tensor[col_indices].cpu().numpy())
-            row_ids = np.arange(start, end, dtype=np.int64)[:, None]
-            rating_rows.append(np.broadcast_to(row_ids, (end - start, max_K)).copy())
+            pred_items[start:end] = target_items_tensor[col_indices].cpu().numpy()
 
-        pred_items = np.vstack(rating_items)
-        pred_rows = np.vstack(rating_rows)
+        pred_rows = np.broadcast_to(
+            np.arange(num_valid_users, dtype=np.int64)[:, None],
+            pred_items.shape,
+        )
         pred_codes = pred_rows * np.int64(model.item_num) + pred_items.astype(np.int64)
         positions = np.searchsorted(truth_codes, pred_codes.reshape(-1))
         in_bounds = positions < len(truth_codes)
