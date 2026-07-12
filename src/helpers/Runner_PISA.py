@@ -27,6 +27,12 @@ class Runner_PISA:
         parser.add_argument('--test_result_file', type=str, default='', help='Path for test results')
         parser.add_argument('--pisa_debug_parity', type=int, default=0,
                             help='Print PISA parity debug information for loader mode, batch losses, and validation.')
+        parser.add_argument('--pisa_aux_optimizer_mode', type=str, default='reuse',
+                            choices=['reuse', 'reset', 'load_forward'],
+                            help='Optimizer state used for the PISA auxiliary step: reuse current, reset, or load forward checkpoint optimizer.')
+        parser.add_argument('--pisa_kmeans_seed_mode', type=str, default='global',
+                            choices=['global', 'epoch', 'isolated_epoch'],
+                            help='PISA k-means RNG mode. global keeps existing behavior; epoch reseeds before k-means; isolated_epoch reseeds only inside k-means.')
         return parser
 
     def __init__(self, args, corpus):
@@ -45,6 +51,8 @@ class Runner_PISA:
         self.test_result_file = args.test_result_file
         self.tepoch = args.tepoch
         self.pisa_debug_parity = bool(getattr(args, 'pisa_debug_parity', 0))
+        self.random_seed = getattr(args, 'random_seed', 0)
+        self.pisa_kmeans_seed_mode = getattr(args, 'pisa_kmeans_seed_mode', 'global')
         self.time = None
         self.snap_boundaries = corpus.snap_boundaries
         self.snapshots_path = corpus.snapshots_path
@@ -53,6 +61,144 @@ class Runner_PISA:
         if self.pisa_debug_parity:
             print(msg, flush=True)
             logging.info(msg)
+
+    def _load_checkpoint(self, model_path, device):
+        if torch.cuda.is_available():
+            return torch.load(model_path)
+        return torch.load(model_path, map_location=torch.device('cpu'))
+
+    def _optimizer_checksum(self, optimizer):
+        if optimizer is None:
+            return 0.0, 0.0, 0.0
+        exp_avg_sum = 0.0
+        exp_avg_sq_sum = 0.0
+        step_sum = 0.0
+        for state in optimizer.state.values():
+            exp_avg = state.get('exp_avg')
+            exp_avg_sq = state.get('exp_avg_sq')
+            step = state.get('step')
+            if torch.is_tensor(exp_avg):
+                exp_avg_sum += float(exp_avg.detach().abs().sum().cpu())
+            if torch.is_tensor(exp_avg_sq):
+                exp_avg_sq_sum += float(exp_avg_sq.detach().abs().sum().cpu())
+            if torch.is_tensor(step):
+                step_sum += float(step.detach().sum().cpu())
+            elif step is not None:
+                step_sum += float(step)
+        return exp_avg_sum, exp_avg_sq_sum, step_sum
+
+    def _param_checksum(self, model):
+        param_sum = 0.0
+        param_sq_sum = 0.0
+        with torch.no_grad():
+            for param in model.parameters():
+                param_sum += float(param.detach().sum().cpu())
+                param_sq_sum += float((param.detach() * param.detach()).sum().cpu())
+        return param_sum, param_sq_sum
+
+    def _debug_state_checksum(self, model, snap_idx, step_flag, label):
+        if not self.pisa_debug_parity:
+            return
+        param_sum, param_sq_sum = self._param_checksum(model)
+        opt_avg_sum, opt_avg_sq_sum, opt_step_sum = self._optimizer_checksum(model.optimizer)
+        self._debug_parity(
+            f'[PISAParity] state label={label} snap_idx={snap_idx} step_flag={step_flag} '
+            f'param_sum={param_sum:.8f} param_sq_sum={param_sq_sum:.8f} '
+            f'opt_exp_avg_abs_sum={opt_avg_sum:.8f} '
+            f'opt_exp_avg_sq_abs_sum={opt_avg_sq_sum:.8f} opt_step_sum={opt_step_sum:.4f}'
+        )
+
+    def _torch_rng_checksum(self):
+        state = torch.random.get_rng_state().to(torch.int64)
+        head = state[:32]
+        checksum = int(head.sum().item())
+        weighted = int((head * torch.arange(1, len(head) + 1, dtype=torch.int64)).sum().item())
+        return checksum, weighted
+
+    def _numpy_rng_checksum(self):
+        state = np.random.get_state()[1][:32].astype(np.uint64)
+        checksum = int(state.sum() % np.iinfo(np.int64).max)
+        weighted = int((state * np.arange(1, len(state) + 1, dtype=np.uint64)).sum() % np.iinfo(np.int64).max)
+        return checksum, weighted
+
+    def _debug_rng_checksum(self, snap_idx, step_flag, epoch, label):
+        if not self.pisa_debug_parity:
+            return
+        torch_sum, torch_weighted = self._torch_rng_checksum()
+        numpy_sum, numpy_weighted = self._numpy_rng_checksum()
+        self._debug_parity(
+            f'[PISAParity] rng label={label} snap_idx={snap_idx} step_flag={step_flag} '
+            f'epoch={epoch} torch_sum={torch_sum} torch_weighted={torch_weighted} '
+            f'numpy_sum={numpy_sum} numpy_weighted={numpy_weighted}'
+        )
+
+    def _debug_centroid_checksum(self, model, snap_idx, step_flag, epoch, label):
+        if not self.pisa_debug_parity or not hasattr(model, 'centr') or not hasattr(model, 'centr_prev'):
+            return
+        centr = model.centr.detach()
+        centr_prev = model.centr_prev.detach()
+        centr_sum = float(centr.sum().cpu())
+        centr_sq_sum = float((centr * centr).sum().cpu())
+        centr_prev_sum = float(centr_prev.sum().cpu())
+        centr_prev_sq_sum = float((centr_prev * centr_prev).sum().cpu())
+        self._debug_parity(
+            f'[PISAParity] kmeans label={label} snap_idx={snap_idx} step_flag={step_flag} '
+            f'epoch={epoch} centr_shape={tuple(centr.shape)} '
+            f'centr_sum={centr_sum:.8f} centr_sq_sum={centr_sq_sum:.8f} '
+            f'centr_prev_sum={centr_prev_sum:.8f} centr_prev_sq_sum={centr_prev_sq_sum:.8f}'
+        )
+
+    def _pisa_epoch_seed(self, snap_idx, step_flag, epoch):
+        return int(self.random_seed) + int(snap_idx) * 1000003 + int(step_flag) * 10007 + int(epoch)
+
+    def _update_kmeans(self, model, prev_model, snap_idx):
+        mode = self.pisa_kmeans_seed_mode
+        if mode == 'global':
+            model.update_kmeans(prev_model)
+            return
+
+        seed = self._pisa_epoch_seed(snap_idx, model.forward_flag, model.epoch)
+        self._debug_parity(
+            f'[PISAParity] kmeans_seed mode={mode} snap_idx={snap_idx} '
+            f'step_flag={model.forward_flag} epoch={model.epoch} seed={seed}'
+        )
+        if mode == 'epoch':
+            torch.manual_seed(seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed(seed)
+            model.update_kmeans(prev_model)
+            return
+
+        devices = []
+        if torch.cuda.is_available() and getattr(model, '_device', None) is not None and model._device.type == 'cuda':
+            devices = [model._device.index if model._device.index is not None else 0]
+        with torch.random.fork_rng(devices=devices, enabled=True):
+            torch.manual_seed(seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed(seed)
+            model.update_kmeans(prev_model)
+
+    def _configure_aux_optimizer(self, model, args, snap_idx, step_flag):
+        if step_flag <= 0:
+            return
+        mode = getattr(args, 'pisa_aux_optimizer_mode', 'reuse')
+        if mode == 'reuse':
+            return
+        if mode == 'reset':
+            model.optimizer = self._build_optimizer(model)
+            self._debug_parity(
+                f'[PISAParity] aux optimizer reset snap_idx={snap_idx} step_flag={step_flag}'
+            )
+            return
+        if mode == 'load_forward':
+            forward_path = f'{model.model_path}_forward_snap{snap_idx}'
+            check_point = self._load_checkpoint(forward_path, model._device)
+            if 'optimizer_state_dict' not in check_point:
+                raise KeyError(f'No optimizer_state_dict found in {forward_path}')
+            model.optimizer.load_state_dict(check_point['optimizer_state_dict'])
+            self._debug_parity(
+                f'[PISAParity] aux optimizer loaded from forward checkpoint {forward_path}'
+            )
 
     def _build_optimizer(self, model):
         if self.optimizer_name.lower() == 'adam':
@@ -168,6 +314,9 @@ class Runner_PISA:
                 forward_model.load_model(f'{model.model_path}_forward_snap{snap_idx}')
                 forward_model.eval()
 
+        self._configure_aux_optimizer(model, args, snap_idx, step_flag)
+        self._debug_state_checksum(model, snap_idx, step_flag, 'before_training')
+
         # Training loop
         num_epoch = self.tepoch if ('finetune' in self.dyn_method or 'newtrain' in self.dyn_method) else self.epoch
         if snap_idx == 0:
@@ -189,6 +338,7 @@ class Runner_PISA:
             model.epoch = epoch
             losses = self.fit(model, data_dict, prev_data, snap_idx, self.shuffle, prev_model, forward_model)
             logging.info(f'Epoch {epoch} total_loss={losses[0]:.4f} bpr_loss={losses[1]:.4f} cl_loss={losses[2]:.4f} plast_loss={losses[3]:.4f} stab_loss={losses[4]:.4f} plast_neigh_loss={losses[5]:.4f} stab_neigh_loss={losses[6]:.4f}')
+            self._debug_state_checksum(model, snap_idx, step_flag, f'after_epoch_{epoch}')
 
             if np.isnan(losses[0]).any():
                 logging.info('NaN loss, stop training')
@@ -239,7 +389,10 @@ class Runner_PISA:
         """Single epoch training loop with k-means updates and batch processing."""
         with torch.no_grad():
             if not ('plasticity' in self.dyn_method and model.forward_flag == 0):
-                model.update_kmeans(prev_model)
+                self._debug_rng_checksum(snap_idx, model.forward_flag, model.epoch, 'before_kmeans')
+                self._update_kmeans(model, prev_model, snap_idx)
+                self._debug_rng_checksum(snap_idx, model.forward_flag, model.epoch, 'after_kmeans')
+                self._debug_centroid_checksum(model, snap_idx, model.forward_flag, model.epoch, 'after_kmeans')
 
         # gc.collect()
         # torch.cuda.empty_cache()
@@ -280,13 +433,19 @@ class Runner_PISA:
             losses = self.train_recommender_vanilla(data, model, current, prev_data, snap_idx, prev_model, forward_model)
             total_losses.append(losses)
             if self.pisa_debug_parity and batch_idx < 2:
+                user_sum = int(current['user_id'].detach().sum().cpu())
+                item_sum = int(current['item_id'].detach().sum().cpu())
+                first_user = int(current['user_id'][0].detach().cpu().reshape(-1)[0])
+                first_items = current['item_id'][0].detach().cpu().reshape(-1).tolist()
                 loss_msg = ' '.join(
                     f'{name}={float(np.asarray(value)):.8f}'
                     for name, value in zip(loss_names, losses)
                 )
                 self._debug_parity(
                     f'[PISAParity] batch snap_idx={snap_idx} step_flag={model.forward_flag} '
-                    f'epoch={model.epoch} batch={batch_idx} {loss_msg}'
+                    f'epoch={model.epoch} batch={batch_idx} user_sum={user_sum} '
+                    f'item_sum={item_sum} first_user={first_user} '
+                    f'first_items={first_items} {loss_msg}'
                 )
 
         return [np.mean(loss).item() for loss in zip(*total_losses)]
