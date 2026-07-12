@@ -43,8 +43,8 @@ def parse_global_args(parser):
     parser.add_argument('--eval_step', type=int, default=2)
     parser.add_argument('--fast_sampler', type=int, default=1,
                         help='Use batched negative sampling in the DataLoader. Enabled by default.')
-    parser.add_argument('--legacy_aux_neg_sampler', type=int, default=0,
-                        help='Use original per-user negative sampler for PISA/Contrastive debug parity.')
+    parser.add_argument('--legacy_aux_neg_sampler', type=int, default=-1,
+                        help='Use original per-user negative sampler for PISA/Contrastive. -1=auto, 0=off, 1=on.')
     parser.add_argument('--persistent_workers', type=int, default=1,
                         help='Keep DataLoader workers alive between epochs when num_workers > 0.')
     parser.add_argument('--prefetch_factor', type=int, default=4,

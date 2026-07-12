@@ -101,10 +101,11 @@ class Dataset(BaseDataset):
         }
 
     def _use_legacy_aux_neg_sampling(self):
-        return (
-            getattr(self.args, 'legacy_aux_neg_sampler', 0)
-            and getattr(self.args, 'model_name', '') in {'PISA_LGN', 'Contrastive_LGN'}
-        )
+        legacy_flag = getattr(self.args, 'legacy_aux_neg_sampler', -1)
+        legacy_models = {'PISA_LGN', 'Contrastive_LGN'}
+        if legacy_flag < 0:
+            return getattr(self.args, 'model_name', '') in legacy_models
+        return bool(legacy_flag) and getattr(self.args, 'model_name', '') in legacy_models
 
     def _build_hist_pair_codes(self, hist_user_clicked_list):
         user_chunks, item_chunks = [], []

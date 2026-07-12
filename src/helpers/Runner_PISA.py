@@ -3,6 +3,7 @@ import gc
 import copy
 import torch
 import logging
+import hashlib
 import numpy as np
 from time import time
 from tqdm import tqdm
@@ -62,6 +63,13 @@ class Runner_PISA:
             print(msg, flush=True)
             logging.info(msg)
 
+    def _effective_legacy_neg_sampler(self, args):
+        legacy_flag = getattr(args, 'legacy_aux_neg_sampler', -1)
+        legacy_models = {'PISA_LGN', 'Contrastive_LGN'}
+        if legacy_flag < 0:
+            return int(getattr(args, 'model_name', '') in legacy_models)
+        return int(bool(legacy_flag) and getattr(args, 'model_name', '') in legacy_models)
+
     def _load_checkpoint(self, model_path, device):
         if torch.cuda.is_available():
             return torch.load(model_path)
@@ -109,27 +117,27 @@ class Runner_PISA:
         )
 
     def _torch_rng_checksum(self):
-        state = torch.random.get_rng_state().to(torch.int64)
-        head = state[:32]
-        checksum = int(head.sum().item())
-        weighted = int((head * torch.arange(1, len(head) + 1, dtype=torch.int64)).sum().item())
-        return checksum, weighted
+        state = torch.random.get_rng_state()
+        digest = hashlib.sha1(state.cpu().numpy().tobytes()).hexdigest()[:12]
+        state_int = state.to(torch.int64)
+        checksum = int(state_int.sum().item())
+        return checksum, digest
 
     def _numpy_rng_checksum(self):
-        state = np.random.get_state()[1][:32].astype(np.uint64)
-        checksum = int(state.sum() % np.iinfo(np.int64).max)
-        weighted = int((state * np.arange(1, len(state) + 1, dtype=np.uint64)).sum() % np.iinfo(np.int64).max)
-        return checksum, weighted
+        state = np.random.get_state()[1].astype(np.uint32)
+        digest = hashlib.sha1(state.tobytes()).hexdigest()[:12]
+        checksum = int(state.astype(np.uint64).sum() % np.iinfo(np.int64).max)
+        return checksum, digest
 
     def _debug_rng_checksum(self, snap_idx, step_flag, epoch, label):
         if not self.pisa_debug_parity:
             return
-        torch_sum, torch_weighted = self._torch_rng_checksum()
-        numpy_sum, numpy_weighted = self._numpy_rng_checksum()
+        torch_sum, torch_digest = self._torch_rng_checksum()
+        numpy_sum, numpy_digest = self._numpy_rng_checksum()
         self._debug_parity(
             f'[PISAParity] rng label={label} snap_idx={snap_idx} step_flag={step_flag} '
-            f'epoch={epoch} torch_sum={torch_sum} torch_weighted={torch_weighted} '
-            f'numpy_sum={numpy_sum} numpy_weighted={numpy_weighted}'
+            f'epoch={epoch} torch_sum={torch_sum} torch_hash={torch_digest} '
+            f'numpy_sum={numpy_sum} numpy_hash={numpy_digest}'
         )
 
     def _debug_centroid_checksum(self, model, snap_idx, step_flag, epoch, label):
@@ -331,6 +339,11 @@ class Runner_PISA:
             f'[PISAParity] start snap_idx={snap_idx} step_flag={step_flag} '
             f'fast_sampler={getattr(args, "fast_sampler", 1)} '
             f'legacy_aux_neg_sampler={getattr(args, "legacy_aux_neg_sampler", 0)} '
+            f'legacy_neg_sampler_effective={self._effective_legacy_neg_sampler(args)} '
+            f'legacy_pisa_aux_loss={getattr(args, "legacy_pisa_aux_loss", 0)} '
+            f'vectorized_eval={getattr(args, "vectorized_eval", 0)} '
+            f'pisa_kmeans_seed_mode={self.pisa_kmeans_seed_mode} '
+            f'pisa_aux_optimizer_mode={getattr(args, "pisa_aux_optimizer_mode", "reuse")} '
             f'shuffle={int(self.shuffle)}'
         )
 
@@ -420,6 +433,7 @@ class Runner_PISA:
             f'epoch={model.epoch} loader={loader_mode} '
             f'fast_collate={int(getattr(data, "_use_fast_collate", False))} '
             f'legacy_aux_neg_sampler={getattr(data.args, "legacy_aux_neg_sampler", 0)} '
+            f'legacy_neg_sampler_effective={int(data._use_legacy_aux_neg_sampling()) if hasattr(data, "_use_legacy_aux_neg_sampling") else 0} '
             f'num_workers={self.num_workers} persistent_workers={self.persistent_workers} '
             f'shuffle={int(bool(shuffle))}'
         )
