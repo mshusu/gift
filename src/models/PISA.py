@@ -166,12 +166,16 @@ class Model(torch.nn.Module):
 
     def _get_index_mask(self, name, values, size):
         cache_name = f'_{name}_mask'
+        key_name = f'_{name}_mask_key'
+        key = (id(values), size, self._device.type, self._device.index)
         cached = getattr(self, cache_name, None)
-        if cached is None or cached.device != self._device:
+        cached_key = getattr(self, key_name, None)
+        if cached is None or cached_key != key or cached.device != self._device:
             cached = torch.zeros(size, dtype=torch.bool, device=self._device)
             if values:
                 cached[torch.as_tensor(list(values), dtype=torch.long, device=self._device)] = True
             setattr(self, cache_name, cached)
+            setattr(self, key_name, key)
         return cached
 
     def _flatten_user_neighbors(self, users, neigh_dict, default_weight=None):

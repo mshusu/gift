@@ -25,6 +25,8 @@ class Runner_PISA:
         parser.add_argument('--num_workers', type=int, default=4, help='Number of processors for DataLoader')
         parser.add_argument('--pin_memory', type=int, default=1, help='pin_memory in DataLoader')
         parser.add_argument('--test_result_file', type=str, default='', help='Path for test results')
+        parser.add_argument('--pisa_debug_parity', type=int, default=0,
+                            help='Print PISA parity debug information for loader mode, batch losses, and validation.')
         return parser
 
     def __init__(self, args, corpus):
@@ -42,9 +44,15 @@ class Runner_PISA:
         self.dyn_method = args.dyn_method
         self.test_result_file = args.test_result_file
         self.tepoch = args.tepoch
+        self.pisa_debug_parity = bool(getattr(args, 'pisa_debug_parity', 0))
         self.time = None
         self.snap_boundaries = corpus.snap_boundaries
         self.snapshots_path = corpus.snapshots_path
+
+    def _debug_parity(self, msg):
+        if self.pisa_debug_parity:
+            print(msg, flush=True)
+            logging.info(msg)
 
     def _build_optimizer(self, model):
         if self.optimizer_name.lower() == 'adam':
@@ -170,6 +178,12 @@ class Runner_PISA:
         patience = 20
         cnt = 0
         model.forward_flag = step_flag
+        self._debug_parity(
+            f'[PISAParity] start snap_idx={snap_idx} step_flag={step_flag} '
+            f'fast_sampler={getattr(args, "fast_sampler", 1)} '
+            f'legacy_aux_neg_sampler={getattr(args, "legacy_aux_neg_sampler", 0)} '
+            f'shuffle={int(self.shuffle)}'
+        )
 
         for epoch in tqdm(range(num_epoch), ncols=100, mininterval=1):
             model.epoch = epoch
@@ -187,9 +201,11 @@ class Runner_PISA:
                 #v_results = Inference.Test(args, model, corpus, 'val', snap_idx)
                 v_results = Inference.Test_excl_cold_selected(args, model, val_loads, hist_loads, lite=True, label='val-lite')
                 # gc.collect()
-                if v_results[0][1] > best_recall:
+                current_recall = v_results[0][1]
+                improved = current_recall > best_recall
+                if improved:
                     best_epoch = epoch + 1
-                    best_recall = v_results[0][1]
+                    best_recall = current_recall
                     save_path = f'_forward_snap{snap_idx}' if (step_flag == 0 and 'plasticity' in self.dyn_method) else f'_snap{snap_idx}'
                     model.save_model(add_path=save_path)
                     cnt = 0
@@ -198,8 +214,18 @@ class Runner_PISA:
                         cnt += eval_step
                         if cnt >= patience:
                             break
+                self._debug_parity(
+                    f'[PISAParity] validation snap_idx={snap_idx} step_flag={step_flag} '
+                    f'epoch={epoch} recall@20={current_recall:.8f} '
+                    f'best_recall@20={best_recall:.8f} best_epoch={best_epoch} '
+                    f'improved={int(improved)}'
+                )
 
         logging.info(f"Training complete. Best validation epoch: {best_epoch:03d}")
+        self._debug_parity(
+            f'[PISAParity] complete snap_idx={snap_idx} step_flag={step_flag} '
+            f'best_epoch={best_epoch} best_recall@20={best_recall:.8f}'
+        )
         
         # Load best model and write results
         model_path = f'{model.model_path}_forward_snap{snap_idx}' if (step_flag == 0 and 'plasticity' in self.dyn_method) else f'{model.model_path}_snap{snap_idx}'
@@ -217,23 +243,51 @@ class Runner_PISA:
 
         # gc.collect()
         # torch.cuda.empty_cache()
-        dl = utils.build_data_loader(
-            data,
-            batch_size=self.batch_size,
-            shuffle=shuffle,
-            num_workers=self.num_workers,
-            pin_memory=self.pin_memory,
-            persistent_workers=self.persistent_workers,
-            prefetch_factor=self.prefetch_factor,
+        use_fast_loader = bool(getattr(data.args, 'fast_sampler', 1))
+        if use_fast_loader:
+            dl = utils.build_data_loader(
+                data,
+                batch_size=self.batch_size,
+                shuffle=shuffle,
+                num_workers=self.num_workers,
+                pin_memory=self.pin_memory,
+                persistent_workers=self.persistent_workers,
+                prefetch_factor=self.prefetch_factor,
+            )
+            loader_mode = 'fast'
+        else:
+            if hasattr(data, '_use_fast_collate'):
+                data._use_fast_collate = False
+            dl = DataLoader(data, batch_size=self.batch_size, shuffle=shuffle,
+                            num_workers=self.num_workers, pin_memory=self.pin_memory)
+            loader_mode = 'baseline'
+
+        self._debug_parity(
+            f'[PISAParity] loader snap_idx={snap_idx} step_flag={model.forward_flag} '
+            f'epoch={model.epoch} loader={loader_mode} '
+            f'fast_collate={int(getattr(data, "_use_fast_collate", False))} '
+            f'legacy_aux_neg_sampler={getattr(data.args, "legacy_aux_neg_sampler", 0)} '
+            f'num_workers={self.num_workers} persistent_workers={self.persistent_workers} '
+            f'shuffle={int(bool(shuffle))}'
         )
 
         total_losses = []
-        for current in dl:
+        loss_names = ['total', 'bpr', 'cl', 'plast', 'stab', 'plast_neigh', 'stab_neigh']
+        for batch_idx, current in enumerate(dl):
             #current = utils.batch_to_gpu(utils.squeeze_dict(current), model._device)
             current = utils.batch_to_gpu(current, model._device)
             current['batch_size'] = len(current['user_id'])
             losses = self.train_recommender_vanilla(data, model, current, prev_data, snap_idx, prev_model, forward_model)
             total_losses.append(losses)
+            if self.pisa_debug_parity and batch_idx < 2:
+                loss_msg = ' '.join(
+                    f'{name}={float(np.asarray(value)):.8f}'
+                    for name, value in zip(loss_names, losses)
+                )
+                self._debug_parity(
+                    f'[PISAParity] batch snap_idx={snap_idx} step_flag={model.forward_flag} '
+                    f'epoch={model.epoch} batch={batch_idx} {loss_msg}'
+                )
 
         return [np.mean(loss).item() for loss in zip(*total_losses)]
 
