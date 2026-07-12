@@ -83,7 +83,13 @@ class Dataset(BaseDataset):
         batch_data = self.train_data[indices]
         user_ids = batch_data[:, 0].astype(np.int64, copy=False)
         pos_items = batch_data[:, 1].astype(np.int64, copy=False)
-        neg_items = self._sample_neg_items_batch(user_ids)
+        if self._use_legacy_aux_neg_sampling():
+            neg_items = np.stack(
+                [self._sample_neg_items_fast(int(user_id)).numpy() for user_id in user_ids],
+                axis=0,
+            )
+        else:
+            neg_items = self._sample_neg_items_batch(user_ids)
 
         item_ids = np.empty((len(indices), self.args.num_neg + 1), dtype=np.int64)
         item_ids[:, 0] = pos_items
@@ -93,6 +99,12 @@ class Dataset(BaseDataset):
             'user_id': torch.from_numpy(user_ids.reshape(-1, 1)),
             'item_id': torch.from_numpy(item_ids),
         }
+
+    def _use_legacy_aux_neg_sampling(self):
+        return (
+            getattr(self.args, 'legacy_aux_neg_sampler', 0)
+            and getattr(self.args, 'model_name', '') in {'PISA_LGN', 'Contrastive_LGN'}
+        )
 
     def _build_hist_pair_codes(self, hist_user_clicked_list):
         user_chunks, item_chunks = [], []

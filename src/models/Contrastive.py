@@ -227,7 +227,7 @@ class Model(torch.nn.Module):
         return torch.cat(neigh_chunks), torch.cat(owner_chunks)
 
     def _weights_for_owners(self, users, weights, owners):
-        weights = weights.squeeze()
+        weights = weights.squeeze().detach()
         sorted_users, order = torch.sort(users)
         sorted_weights = weights[order]
         positions = torch.searchsorted(sorted_users, owners)
