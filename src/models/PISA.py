@@ -49,6 +49,10 @@ class Model(torch.nn.Module):
                             help='')
         parser.add_argument('--temp', type=float, default=1.0,
                             help='')
+        parser.add_argument('--legacy_pisa_aux_loss', type=int, default=0,
+                            help='Use the original PISA auxiliary loss implementation for parity debugging.')
+        parser.add_argument('--compare_pisa_aux_loss', type=int, default=0,
+                            help='Print loss differences between original and vectorized PISA auxiliary loss.')
         return parser
 
     @staticmethod
@@ -81,6 +85,9 @@ class Model(torch.nn.Module):
         self.temp = args.temp
         self.test_result_file = args.test_result_file
         self.forward_flag = 0
+        self.legacy_pisa_aux_loss = bool(getattr(args, 'legacy_pisa_aux_loss', 0))
+        self.compare_pisa_aux_loss = bool(getattr(args, 'compare_pisa_aux_loss', 0))
+        self._pisa_loss_compare_prints = 0
 
         self._define_params()
 
@@ -215,6 +222,64 @@ class Model(torch.nn.Module):
         return owner_weights
 
     def loss(self, data, current_data, prev_data, time_idx, prev_model, forward_model, reduction):
+        if self.legacy_pisa_aux_loss:
+            losses = self._loss_legacy(data, current_data, prev_data, time_idx, prev_model, forward_model, reduction)
+            self._compare_pisa_aux_losses(
+                data, current_data, prev_data, time_idx, prev_model, forward_model, reduction,
+                losses, primary_name='legacy',
+            )
+            return losses
+
+        losses = self._loss_vectorized(data, current_data, prev_data, time_idx, prev_model, forward_model, reduction)
+        self._compare_pisa_aux_losses(
+            data, current_data, prev_data, time_idx, prev_model, forward_model, reduction,
+            losses, primary_name='vectorized',
+        )
+        return losses
+
+    def _compare_pisa_aux_losses(self, data, current_data, prev_data, time_idx, prev_model, forward_model, reduction,
+                                 primary_losses, primary_name):
+        if not self.compare_pisa_aux_loss or self._pisa_loss_compare_prints >= 20:
+            return
+        if time_idx == 0 or (self.forward_flag == 0 and 'plasticity' in self.dyn_method):
+            return
+        if getattr(self, 'keep_prob', -1) > 0:
+            if self._pisa_loss_compare_prints == 0:
+                msg = '[PISALossCompare] skipped because keep_prob > 0 would consume random dropout masks'
+                print(msg, flush=True)
+                logging.info(msg)
+                self._pisa_loss_compare_prints += 1
+            return
+
+        with torch.no_grad():
+            if primary_name == 'legacy':
+                other_losses = self._loss_vectorized(
+                    data, current_data, prev_data, time_idx, prev_model, forward_model, reduction,
+                )
+                other_name = 'vectorized'
+            else:
+                other_losses = self._loss_legacy(
+                    data, current_data, prev_data, time_idx, prev_model, forward_model, reduction,
+                )
+                other_name = 'legacy'
+
+        primary_values = [float(loss.detach().cpu()) for loss in primary_losses]
+        other_values = [float(loss.detach().cpu()) for loss in other_losses]
+        diffs = [abs(primary - other) for primary, other in zip(primary_values, other_values)]
+        names = ['total', 'bpr', 'cl', 'plast', 'stab', 'plast_neigh', 'stab_neigh']
+        diff_msg = ' '.join(
+            f'{name}_diff={diff:.8f} {primary_name}_{name}={primary:.8f} {other_name}_{name}={other:.8f}'
+            for name, diff, primary, other in zip(names, diffs, primary_values, other_values)
+        )
+        msg = (
+            f'[PISALossCompare] epoch={self.epoch} forward_flag={self.forward_flag} '
+            f'batch_size={len(current_data["user_id"])} primary={primary_name} {diff_msg}'
+        )
+        print(msg, flush=True)
+        logging.info(msg)
+        self._pisa_loss_compare_prints += 1
+
+    def _loss_vectorized(self, data, current_data, prev_data, time_idx, prev_model, forward_model, reduction):
         all_users, all_items = self.computer()
         u_ids = current_data['user_id'].repeat((1, current_data['item_id'].shape[1])).to(torch.long)
         i_ids = current_data['item_id'].to(torch.long)
@@ -307,6 +372,123 @@ class Model(torch.nn.Module):
                     weights_2_neigh = self._weights_for_owners(users, weights_2, users_total)
                     stab_neigh_loss = self.condition_info_nce_for_embeddings(all_items_prev[user_neighbors_total], all_users[users_total], weights_2_neigh)
                     cl_loss += stab_neigh_loss * self.bound_weight
+
+        loss = bpr_loss + cl_loss
+
+        return loss, bpr_loss, cl_loss, plast_loss, stab_loss, plast_neigh_loss, stab_neigh_loss
+
+    def _loss_legacy(self, data, current_data, prev_data, time_idx, prev_model, forward_model, reduction):
+        all_users, all_items = self.computer()
+        u_ids = current_data['user_id'].repeat((1, current_data['item_id'].shape[1])).to(torch.long)
+        i_ids = current_data['item_id'].to(torch.long)
+
+        u_vectors, i_vectors = all_users[u_ids], all_items[i_ids]
+        predictions = (u_vectors * i_vectors).sum(dim=-1)
+
+        pos_pred, neg_pred = predictions[:, 0], predictions[:, 1:1 + self.num_neg]
+        bpr_loss = -(pos_pred[:, None] - neg_pred).sigmoid().log().mean(dim=1)
+        bpr_loss = bpr_loss.mean() if reduction == 'mean' else bpr_loss
+
+        if time_idx == 0 or (self.forward_flag == 0 and 'plasticity' in self.dyn_method):
+            return self.return_zero_losses(bpr_loss)
+
+        # unique users and items that are both in the current and previous data
+        pos_i_ids = i_ids[:, 0]
+        users, items = u_ids.unique(), pos_i_ids.unique()
+        users = users[torch.isin(users, torch.tensor(list(prev_data.user_set)).to(self._device))]
+        items = items[torch.isin(items, torch.tensor(list(prev_data.item_set)).to(self._device))]
+        if len(users) == 0 or len(items) == 0:
+            return self.return_zero_losses(bpr_loss)
+
+        # Get embeddings
+        all_users_prev, all_items_prev = prev_model.computer()
+        u_vectors_prev, i_vectors_prev = all_users_prev[users], all_items_prev[items]
+        u_vectors, i_vectors = all_users[users], all_items[items]
+
+        if self.forward_flag > 0:
+            all_users_forward, all_items_forward = forward_model.computer()
+            u_vectors_forward, i_vectors_forward = all_users_forward[users], all_items_forward[items]
+
+        # Neighbor information
+        if 'userneigh' in self.dyn_method:
+            if 'stability' in self.dyn_method:
+                user_neighbors_total = torch.tensor([]).to(torch.long).to(self._device)
+                users_total = torch.tensor([]).to(torch.long).to(self._device)
+                for user in users:
+                    user_neighbors = prev_data.user_neigh[user.item()]
+                    if len(user_neighbors) == 0:
+                        continue
+                    user_neighbors = torch.tensor(user_neighbors).to(self._device)
+                    user_neighbors_total = torch.cat((user_neighbors_total, user_neighbors), axis=0)
+                    users_total = torch.cat((users_total, user.repeat(len(user_neighbors))), axis=0)
+
+            if 'plasticity' in self.dyn_method:
+                user_neighbors_total_new = torch.tensor([]).to(torch.long).to(self._device)
+                users_total_new = torch.tensor([]).to(torch.long).to(self._device)
+                for user in u_ids.unique():
+                    user_neighbors = data.user_neigh[user.item()]
+                    if len(user_neighbors) == 0:
+                        continue
+                    user_neighbors = torch.tensor(user_neighbors).to(self._device)
+                    user_neighbors_total_new = torch.cat((user_neighbors_total_new, user_neighbors), axis=0)
+                    users_total_new = torch.cat((users_total_new, user.repeat(len(user_neighbors))), axis=0)
+
+                if 'userneighcur' in self.dyn_method:
+                    user_neighbors_total_current = torch.tensor([]).to(torch.long).to(self._device)
+                    users_total_current = torch.tensor([]).to(torch.long).to(self._device)
+                    for user in users:
+                        user_neighbors = data.user_neigh[user.item()]
+                        if len(user_neighbors) == 0:
+                            continue
+                        user_neighbors = torch.tensor(user_neighbors).to(self._device)
+                        user_neighbors_total_current = torch.cat((user_neighbors_total_current, user_neighbors), axis=0)
+                        users_total_current = torch.cat((users_total_current, user.repeat(len(user_neighbors))), axis=0)
+
+        cl_loss = torch.tensor([0.0], dtype=torch.float32).to(self._device)
+        plast_loss = torch.tensor([0.0], dtype=torch.float32).to(self._device)
+        stab_loss = torch.tensor([0.0], dtype=torch.float32).to(self._device)
+        plast_neigh_loss = torch.tensor([0.0], dtype=torch.float32).to(self._device)
+        stab_neigh_loss = torch.tensor([0.0], dtype=torch.float32).to(self._device)
+
+        weights_1 = self.generate_deterministic_weight(u_vectors, u_vectors_prev, self.centr, self.centr_prev)
+        weights_2 = 1 - weights_1
+
+        L = self.ratio
+        # only use weights that are top-L% of the weights for the plasticity_enhancement_loss
+        weights_1 = torch.where(weights_1 > torch.quantile(weights_1, 1-L), weights_1, torch.tensor([0.0], dtype=torch.float32).to(self._device))
+        # only use weights that are bottom-L% of the weights for the stability_enhancement_loss
+        weights_2 = torch.where(weights_2 > torch.quantile(weights_2, 1-L), weights_2, torch.tensor([0.0], dtype=torch.float32).to(self._device))
+
+        # Plasticity loss
+        if 'plasticity' in self.dyn_method:
+            plast_loss = self.condition_info_nce_for_embeddings(u_vectors_forward, u_vectors, weights_1)
+            cl_loss += plast_loss * self.bound_weight
+            if 'userneigh' in self.dyn_method:
+                if 'userneighcur' in self.dyn_method:
+                    user_to_weight = {user.item(): weight.item() for user, weight in zip(users, weights_1)}
+                    weights_1_neigh_current = torch.tensor([user_to_weight[user.item()] for user in users_total_current]).to(self._device)
+                    plast_neigh_loss = self.condition_info_nce_for_embeddings(all_items_forward[user_neighbors_total_current], all_users[users_total_current], weights_1_neigh_current)
+                    cl_loss += plast_neigh_loss * self.bound_weight
+
+                else:
+                    user_to_weight = {user.item(): weight.item() for user, weight in zip(users, weights_1)}
+                    for user in users_total_new:
+                        if user.item() not in user_to_weight:
+                            user_to_weight[user.item()] = 0.5
+
+                    weights_1_neigh_new = torch.tensor([user_to_weight[user.item()] for user in users_total_new]).to(self._device)
+                    plast_neigh_loss = self.condition_info_nce_for_embeddings(all_items_forward[user_neighbors_total_new], all_users[users_total_new], weights_1_neigh_new)
+                    cl_loss += plast_neigh_loss * self.bound_weight
+
+        # Stability loss
+        if 'stability' in self.dyn_method:
+            stab_loss = self.condition_info_nce_for_embeddings(u_vectors_prev, u_vectors, weights_2)
+            cl_loss += stab_loss * self.bound_weight
+            if 'userneigh' in self.dyn_method:
+                user_to_weight = {user.item(): weight.item() for user, weight in zip(users, weights_2)}
+                weights_2_neigh = torch.tensor([user_to_weight[user.item()] for user in users_total]).to(self._device)
+                stab_neigh_loss = self.condition_info_nce_for_embeddings(all_items_prev[user_neighbors_total], all_users[users_total], weights_2_neigh)
+                cl_loss += stab_neigh_loss * self.bound_weight
 
         loss = bpr_loss + cl_loss
 
