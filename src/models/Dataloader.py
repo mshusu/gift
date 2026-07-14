@@ -101,7 +101,7 @@ class Dataset(BaseDataset):
         }
 
     def _use_legacy_aux_neg_sampling(self):
-	return getattr(self.args, 'legacy_aux_neg_sampler') 
+        return getattr(self.args, 'legacy_aux_neg_sampler') 
 
         legacy_flag = getattr(self.args, 'legacy_aux_neg_sampler', -1)
         legacy_models = {'PISA_LGN', 'Contrastive_LGN'}
