@@ -160,8 +160,31 @@ class Dataset(BaseDataset):
         neg_items = np.full((batch_size, num_neg), -1, dtype=np.int64)
         selected_counts = np.zeros(batch_size, dtype=np.int64)
         candidate_width = max(num_neg * 16, 64)
+        clicked_sets = [self.hist_user_clicked_set.get(int(user_id), set()) for user_id in user_ids]
 
-        for _ in range(3):
+        low_pool_rows = [
+            row for row, clicked_set in enumerate(clicked_sets)
+            if len(pool) - len(clicked_set) < num_neg
+        ]
+        for row in low_pool_rows:
+            clicked_set = clicked_sets[row]
+            targets = np.array(
+                [item for item in pool if item not in clicked_set],
+                dtype=np.int64,
+            )
+            repeats = num_neg // len(targets)
+            remainder = num_neg % len(targets)
+            fill = np.tile(targets, repeats)
+            neg_items[row, :len(fill)] = fill
+            if remainder:
+                neg_items[row, repeats * len(targets):] = np.random.choice(
+                    targets,
+                    size=remainder,
+                    replace=False,
+                )
+            selected_counts[row] = num_neg
+
+        while True:
             active_rows = np.flatnonzero(selected_counts < num_neg)
             if len(active_rows) == 0:
                 break
@@ -186,38 +209,6 @@ class Dataset(BaseDataset):
             target_cols = ranks[local_rows, cols] - 1
             neg_items[target_rows, target_cols] = candidates[local_rows, cols]
             selected_counts += np.bincount(target_rows, minlength=batch_size)
-
-        for row in np.flatnonzero(selected_counts < num_neg):
-            user_id = int(user_ids[row])
-            clicked_set = self.hist_user_clicked_set.get(user_id, set())
-            valid_pool = np.array(
-                [item for item in pool if int(item) not in clicked_set],
-                dtype=np.int64,
-            )
-            if len(valid_pool) == 0:
-                raise ValueError(f'No available negative items for user {user_id}')
-
-            if len(valid_pool) < num_neg:
-                repeats = num_neg // len(valid_pool)
-                remainder = num_neg % len(valid_pool)
-                fill = np.tile(valid_pool, repeats)
-                neg_items[row, :len(fill)] = fill
-                if remainder:
-                    neg_items[row, repeats * len(valid_pool):] = np.random.choice(
-                        valid_pool,
-                        size=remainder,
-                        replace=False,
-                    )
-                continue
-
-            chosen = set(int(item) for item in neg_items[row, :selected_counts[row]])
-            while selected_counts[row] < num_neg:
-                item = int(valid_pool[np.random.randint(0, len(valid_pool))])
-                if item in chosen:
-                    continue
-                neg_items[row, selected_counts[row]] = item
-                chosen.add(item)
-                selected_counts[row] += 1
 
         return neg_items
 
