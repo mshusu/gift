@@ -58,6 +58,7 @@ class Dataset(BaseDataset):
         self.hist_pair_codes = self._build_hist_pair_codes(hist_user_clicked_list)
         self.current_unique_items = np.unique(self.trainItem)
         self.current_unique_item_set = set(int(item) for item in self.current_unique_items)
+        self.hist_current_clicked_counts = self._build_hist_current_clicked_counts()
         self.all_items = np.arange(corpus.n_items, dtype=np.int64)
 
         
@@ -125,6 +126,23 @@ class Dataset(BaseDataset):
         items = np.concatenate(item_chunks)
         return np.sort(users * np.int64(self.corpus.n_items) + items)
 
+    def _build_hist_current_clicked_counts(self):
+        counts = np.zeros(self.corpus.n_users, dtype=np.int64)
+        if self.hist_pair_codes.size == 0 or self.current_unique_items.size == 0:
+            return counts
+
+        n_items = np.int64(self.corpus.n_items)
+        pair_users = self.hist_pair_codes // n_items
+        pair_items = self.hist_pair_codes % n_items
+
+        current_item_mask = np.zeros(self.corpus.n_items, dtype=bool)
+        current_item_mask[self.current_unique_items] = True
+        users_clicked_in_pool = pair_users[current_item_mask[pair_items]]
+        return np.bincount(
+            users_clicked_in_pool,
+            minlength=self.corpus.n_users,
+        ).astype(np.int64, copy=False)
+
     def _hist_clicked_mask_batch(self, user_ids, candidate_items):
         if self.hist_pair_codes.size == 0:
             return np.zeros(candidate_items.shape, dtype=bool)
@@ -137,6 +155,22 @@ class Dataset(BaseDataset):
         clicked = np.zeros(codes.shape, dtype=bool)
         clicked[in_bounds] = self.hist_pair_codes[positions[in_bounds]] == codes[in_bounds]
         return clicked.reshape(candidate_items.shape)
+
+    def _valid_current_items(self, clicked_set):
+        if not clicked_set:
+            return self.current_unique_items
+
+        clicked_items = np.fromiter(
+            clicked_set,
+            dtype=np.int64,
+            count=len(clicked_set),
+        )
+        return self.current_unique_items[np.isin(
+            self.current_unique_items,
+            clicked_items,
+            assume_unique=True,
+            invert=True,
+        )]
 
     @staticmethod
     def _row_duplicate_mask(values):
@@ -158,22 +192,24 @@ class Dataset(BaseDataset):
         if len(pool) == 0:
             raise ValueError('Cannot sample negatives from an empty item pool')
 
+        user_ids = np.asarray(user_ids, dtype=np.int64)
         batch_size = len(user_ids)
         neg_items = np.full((batch_size, num_neg), -1, dtype=np.int64)
         selected_counts = np.zeros(batch_size, dtype=np.int64)
         candidate_width = max(num_neg * 16, 64)
-        clicked_sets = [self.hist_user_clicked_set.get(int(user_id), set()) for user_id in user_ids]
 
-        low_pool_rows = [
-            row for row, clicked_set in enumerate(clicked_sets)
-            if len(pool) - len(clicked_set) < num_neg
-        ]
-        for row in low_pool_rows:
-            clicked_set = clicked_sets[row]
-            targets = np.array(
-                [item for item in pool if item not in clicked_set],
-                dtype=np.int64,
+        valid_counts = len(pool) - self.hist_current_clicked_counts[user_ids]
+        empty_pool_rows = np.flatnonzero(valid_counts == 0)
+        if empty_pool_rows.size:
+            empty_users = user_ids[empty_pool_rows[:10]].tolist()
+            raise ValueError(
+                f'No valid negative items in the current pool for users {empty_users}'
             )
+
+        low_pool_rows = np.flatnonzero(valid_counts < num_neg)
+        for row in low_pool_rows:
+            clicked_set = self.hist_user_clicked_set.get(int(user_ids[row]), set())
+            targets = self._valid_current_items(clicked_set)
             repeats = num_neg // len(targets)
             remainder = num_neg % len(targets)
             fill = np.tile(targets, repeats)
@@ -264,15 +300,19 @@ class Dataset(BaseDataset):
     
     def _sample_neg_items_fast(self, user_id):
         num_neg = self.args.num_neg
+        user_id = int(user_id)
         clicked_set = self.hist_user_clicked_set.get(user_id, set())
         sample_pool = self.current_unique_items
+        valid_count = len(sample_pool) - self.hist_current_clicked_counts[user_id]
 
-        if len(sample_pool) - len(clicked_set) < num_neg:
-            # Not enough distinct negatives: reuse each valid item evenly
-            targets = np.array(
-                [item for item in sample_pool if item not in clicked_set],
-                dtype=np.int64,
+        if valid_count == 0:
+            raise ValueError(
+                f'No valid negative items in the current pool for user {user_id}'
             )
+
+        if valid_count < num_neg:
+            # Not enough distinct negatives: reuse each valid item evenly
+            targets = self._valid_current_items(clicked_set)
             repeats = num_neg // len(targets)
             remainder = num_neg % len(targets)
             neg_items = list(np.tile(targets, repeats))
