@@ -288,7 +288,7 @@ class Model(torch.nn.Module):
         predictions = (u_vectors * i_vectors).sum(dim=-1)
 
         pos_pred, neg_pred = predictions[:, 0], predictions[:, 1:1 + self.num_neg]
-        bpr_loss = -(pos_pred[:, None] - neg_pred).sigmoid().log().mean(dim=1)
+        bpr_loss = F.softplus(neg_pred - pos_pred[:, None]).mean(dim=1)
         bpr_loss = bpr_loss.mean() if reduction == 'mean' else bpr_loss
 
         if time_idx == 0 or (self.forward_flag == 0 and 'plasticity' in self.dyn_method):
@@ -386,7 +386,7 @@ class Model(torch.nn.Module):
         predictions = (u_vectors * i_vectors).sum(dim=-1)
 
         pos_pred, neg_pred = predictions[:, 0], predictions[:, 1:1 + self.num_neg]
-        bpr_loss = -(pos_pred[:, None] - neg_pred).sigmoid().log().mean(dim=1)
+        bpr_loss = F.softplus(neg_pred - pos_pred[:, None]).mean(dim=1)
         bpr_loss = bpr_loss.mean() if reduction == 'mean' else bpr_loss
 
         if time_idx == 0 or (self.forward_flag == 0 and 'plasticity' in self.dyn_method):
@@ -505,14 +505,11 @@ class Model(torch.nn.Module):
         x_norm = F.normalize(x, dim=-1)
         y_norm = F.normalize(z, dim=-1)
 
-        scores = torch.mm(x_norm, y_norm.t())
-        scores_diag = torch.diag(scores)
-        numerator = torch.exp(scores_diag / tau)  # positive samples
-        denominator = torch.sum(torch.exp(scores / tau), dim=1)
+        logits = torch.mm(x_norm, y_norm.t()) / tau
+        labels = torch.arange(logits.shape[0], device=logits.device)
+        loss = F.cross_entropy(logits, labels, reduction='none')
         if weights is not None:
-            loss = -torch.log(numerator / denominator) * weights.squeeze()
-        else:
-            loss = -torch.log(numerator / denominator)
+            loss = loss * weights.squeeze()
         return loss.mean()
 
         

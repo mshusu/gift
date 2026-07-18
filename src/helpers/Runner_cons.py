@@ -246,8 +246,8 @@ class Runner_cons(object):
             # loss, bpr_loss, kd_loss, kd_loss_user, kd_loss_item, kd_loss_user_neighbor, kd_loss_item_neighbor
             logging.info(f'Epoch {epoch} total_loss={losses[0]:.4f} bpr_loss={losses[1]:.4f} kd_loss={losses[2]:.4f} kd_user={losses[3]:.4f} kd_item={losses[4]:.4f} kd_user_neigh={losses[5]:.4f} kd_item_neigh={losses[6]:.4f}')
 
-            if np.isnan(losses[0]).any():
-                logging.info('NaN loss, stop training')
+            if not np.isfinite(losses[0]):
+                logging.info('Non-finite loss, stop training')
                 exit()
 
             # Validation and early stopping

@@ -353,8 +353,8 @@ class Runner_PISA:
             logging.info(f'Epoch {epoch} total_loss={losses[0]:.4f} bpr_loss={losses[1]:.4f} cl_loss={losses[2]:.4f} plast_loss={losses[3]:.4f} stab_loss={losses[4]:.4f} plast_neigh_loss={losses[5]:.4f} stab_neigh_loss={losses[6]:.4f}')
             self._debug_state_checksum(model, snap_idx, step_flag, f'after_epoch_{epoch}')
 
-            if np.isnan(losses[0]).any():
-                logging.info('NaN loss, stop training')
+            if not np.isfinite(losses[0]):
+                logging.info('Non-finite loss, stop training')
                 exit()
 
             # Validation and early stopping
