@@ -196,7 +196,7 @@ class Dataset(BaseDataset):
         batch_size = len(user_ids)
         neg_items = np.full((batch_size, num_neg), -1, dtype=np.int64)
         selected_counts = np.zeros(batch_size, dtype=np.int64)
-        candidate_width = max(num_neg * 16, 64)
+        candidate_width = max(num_neg * 2, 8)
 
         valid_counts = len(pool) - self.hist_current_clicked_counts[user_ids]
         empty_pool_rows = np.flatnonzero(valid_counts == 0)
