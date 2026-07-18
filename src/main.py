@@ -274,6 +274,8 @@ if __name__ == '__main__':
     log_args2 = [init_args.model_name, init_args.dyn_method]
     if hasattr(args, 'strefreq_alpha'):
         log_args2.append(str(args.strefreq_alpha))
+    if 'globalinfocontent' in init_args.dyn_method:
+        print(f'GI weight mode: {args.gitf_weight_mode}')
     log_args3 = []
 
 

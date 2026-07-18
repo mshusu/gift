@@ -47,6 +47,13 @@ class Runner(object):
         parser.add_argument("--strefreq_alpha", type=float, default=0.01)
         parser.add_argument("--strefreq_steplowerbound", type=float, default=-1) # 2.71828
         parser.add_argument("--strefreq_stepupperbound", type=float, default=-1) # 1096
+        parser.add_argument(
+            "--gitf_weight_mode",
+            type=str,
+            default="margin",
+            choices=["margin", "example"],
+            help="Apply GI weights to the BPR score margin or to each example loss.",
+        )
 
         return parser
 
@@ -107,24 +114,24 @@ class Runner(object):
         )
         print(eval_msg, flush=True)
         logging.info(eval_msg)
-        v_results = Inference.Test_excl_cold_selected(args, model, test_loads, hist_loads, label='test')
-        t_results = Inference.Test_excl_cold_selected(args, model, val_loads, hist_loads, label='val')
+        val_results = Inference.Test_excl_cold_selected(args, model, val_loads, hist_loads, label='val')
+        test_results = Inference.Test_excl_cold_selected(args, model, test_loads, hist_loads, label='test')
         logging.info("Trained model testing")
 
         # Save validation results
-        val_str = Inference.print_results(None, v_results, None)
+        val_str = Inference.print_results(None, val_results, None)
         val_path = os.path.join(self.test_result_file, f'{option}val_snap{snap_idx}.txt')
         open(val_path, 'w+').write(val_str)
 
         # Save test results
-        test_str = Inference.print_results(None, None, t_results)
+        test_str = Inference.print_results(None, None, test_results)
         test_path = os.path.join(self.test_result_file, f'{option}test_snap{snap_idx}.txt')
         open(test_path, 'w+').write(test_str)
 
         # Save metrics to JSON
         Ks = [10, 20, 50, 100]
         metrics = ['Recall', 'NDCG', 'MRR', 'Precision']
-        json_results = {f'{metric}@{k}': v for metric, values in zip(metrics, t_results) for k, v in zip(Ks, values)}
+        json_results = {f'{metric}@{k}': v for metric, values in zip(metrics, test_results) for k, v in zip(Ks, values)}
         json_path = os.path.join(self.test_result_file, f'{option}test_snap{snap_idx}.json')
         with open(json_path, 'w') as f:
             json.dump(json_results, f, indent=4)

@@ -46,6 +46,9 @@ class Model(torch.nn.Module):
         self.num_neg = args.num_neg
         self.item_num = corpus.n_items
         self.user_num = corpus.n_users
+        self.gitf_weight_mode = args.gitf_weight_mode
+        if self.gitf_weight_mode not in {'margin', 'example'}:
+            raise ValueError(f'Unknown GI weight mode: {self.gitf_weight_mode}')
         self.optimizer = None
         self._define_params()
         self.total_parameters = self.count_variables()
@@ -67,11 +70,18 @@ class Model(torch.nn.Module):
         predictions = (u_vectors * i_vectors).sum(dim=-1)
 
         pos_pred, neg_pred = predictions[:, 0], predictions[:, 1:1 + self.num_neg]  # 1 pos : self.num_neg neg
+        margin = pos_pred[:, None] - neg_pred
+        weights = None
         if gitf_w is not None:
-            pos_pred *= gitf_w #(bs,)
-            neg_pred *= gitf_w.unsqueeze(1) #(bs,num_neg)
-        # BPR loss
-        bpr_loss = -(pos_pred[:, None] - neg_pred).sigmoid().log().mean(dim=1)
+            weights = gitf_w.reshape(-1, 1)
+            if self.gitf_weight_mode == 'margin':
+                margin = margin * weights
+
+        pair_loss = F.softplus(-margin)
+        if weights is not None and self.gitf_weight_mode == 'example':
+            pair_loss = pair_loss * weights
+
+        bpr_loss = pair_loss.mean(dim=1)
         if reduction == 'mean':
             bpr_loss = bpr_loss.mean()
 
@@ -105,4 +115,3 @@ class Model(torch.nn.Module):
     def count_variables(self) -> int:
         total_parameters = sum(p.numel() for p in self.parameters() if p.requires_grad)
         return total_parameters
-
