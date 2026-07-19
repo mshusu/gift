@@ -336,6 +336,7 @@ class Runner_PISA:
             f'[PISAParity] start snap_idx={snap_idx} step_flag={step_flag} '
             f'fast_sampler={args.fast_sampler} '
             f'legacy_aux_neg_sampler={args.legacy_aux_neg_sampler} '
+            f'neg_sampling_pool={args.neg_sampling_pool} '
             f'legacy_pisa_aux_loss={args.legacy_pisa_aux_loss} '
             f'vectorized_eval={args.vectorized_eval} '
             f'pisa_kmeans_seed_mode={self.pisa_kmeans_seed_mode} '
@@ -447,6 +448,7 @@ class Runner_PISA:
             f'epoch={model.epoch} loader={loader_mode} '
             f'fast_collate={int(getattr(data, "_use_fast_collate", False))} '
             f'legacy_aux_neg_sampler={data.args.legacy_aux_neg_sampler} '
+            f'neg_sampling_pool={data.args.neg_sampling_pool} '
             f'num_workers={self.num_workers} persistent_workers={self.persistent_workers} '
             f'shuffle={int(bool(shuffle))}'
         )

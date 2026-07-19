@@ -50,6 +50,13 @@ def parse_global_args(parser):
                         help='Use batched negative sampling in the DataLoader. Enabled by default.')
     parser.add_argument('--legacy_aux_neg_sampler', type=int, default=0, choices=[0, 1],
                         help='Use the original per-user negative sampler instead of batched sampling.')
+    parser.add_argument(
+        '--neg_sampling_pool',
+        type=str,
+        default='current',
+        choices=['current', 'historical'],
+        help='Sample negatives from the current training block or cumulative historical items.',
+    )
     parser.add_argument('--persistent_workers', type=int, default=1,
                         help='Keep DataLoader workers alive between epochs when num_workers > 0.')
     parser.add_argument('--prefetch_factor', type=int, default=4,
@@ -326,6 +333,8 @@ if __name__ == '__main__':
 
     for arg in params:
         log_args3.append(arg + '=' + str(eval('args.' + arg)))
+    if args.neg_sampling_pool != 'current':
+        log_args3.append('neg_sampling_pool=' + args.neg_sampling_pool)
 
     log_file_name1 = '__'.join(log_args1).replace(' ', '__')
     log_file_name2 = '__'.join(log_args2).replace(' ', '__')
