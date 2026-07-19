@@ -71,10 +71,10 @@ def computeTopNAccuracy(GroundTruth, predictedIndices, topN):
 # #                 print(GroundTruth[i])
 #                 print(userHit / len(GroundTruth[i]))
 #                 print(ndcg)
-        precision.append(round(sumForPrecision / cnt, 4))
-        recall.append(round(sumForRecall / cnt, 4))
-        NDCG.append(round(sumForNdcg / cnt, 4))
-        MRR.append(round(sumForMRR / cnt, 4))
+        precision.append(float(sumForPrecision / cnt))
+        recall.append(float(sumForRecall / cnt))
+        NDCG.append(float(sumForNdcg / cnt))
+        MRR.append(float(sumForMRR / cnt))
         
     return recall, NDCG, MRR, precision
 
@@ -109,7 +109,7 @@ def computeTopNAccuracy_fast(GroundTruth, predictedIndices, topN, lite = False):
         for k in topN:
             k_idx = k - 1
             user_recalls = hit_cumsum[:, k_idx] / actual_counts
-            results['recall'].append(round(np.mean(user_recalls), 4))
+            results['recall'].append(float(np.mean(user_recalls)))
         return results['recall'], None, None, None
     
     # DCG: score / log2(rank + 1) ->  rank is j+1 so that log2(j+2)
@@ -140,10 +140,10 @@ def computeTopNAccuracy_fast(GroundTruth, predictedIndices, topN, lite = False):
         user_ndcgs = current_dcg / user_idcgs
 
         # avg over user
-        results['recall'].append(round(np.mean(user_recalls), 4))
-        results['precision'].append(round(np.mean(user_precisions), 4))
-        results['mrr'].append(round(np.mean(user_mrrs), 4))
-        results['ndcg'].append(round(np.mean(user_ndcgs), 4))
+        results['recall'].append(float(np.mean(user_recalls)))
+        results['precision'].append(float(np.mean(user_precisions)))
+        results['mrr'].append(float(np.mean(user_mrrs)))
+        results['ndcg'].append(float(np.mean(user_ndcgs)))
 
     return results['recall'], results['ndcg'], results['mrr'], results['precision']
 
@@ -537,7 +537,7 @@ def Test_excl_cold_vectorized(args, model, test_loads, hist_loads, lite=False):
         if lite:
             for k in Ks:
                 recalls = hit_cumsum[:, k - 1] / test_item_counts
-                results['recall'].append(round(float(np.mean(recalls)), 4))
+                results['recall'].append(float(np.mean(recalls)))
             return results['recall'], None, None, None
 
         weights = 1.0 / np.log2(np.arange(2, max_K + 2))
@@ -557,10 +557,10 @@ def Test_excl_cold_vectorized(args, model, test_loads, hist_loads, lite=False):
             idcgs = weights_cumsum[idcg_counts - 1]
             ndcgs = dcg_matrix[:, k_idx] / idcgs
 
-            results['recall'].append(round(float(np.mean(recalls)), 4))
-            results['ndcg'].append(round(float(np.mean(ndcgs)), 4))
-            results['mrr'].append(round(float(np.mean(mrrs)), 4))
-            results['precision'].append(round(float(np.mean(precisions)), 4))
+            results['recall'].append(float(np.mean(recalls)))
+            results['ndcg'].append(float(np.mean(ndcgs)))
+            results['mrr'].append(float(np.mean(mrrs)))
+            results['precision'].append(float(np.mean(precisions)))
 
         return results['recall'], results['ndcg'], results['mrr'], results['precision']
 
@@ -635,6 +635,14 @@ def Test_excl_cold_selected(args, model, test_loads, hist_loads, lite=False, lab
     return Test_excl_cold(args, model, test_loads, hist_loads, lite=lite)
 
 
+def _metric_text(value):
+    return str(round(float(value), 4))
+
+
+def _metric_list_text(values):
+    return '-'.join(_metric_text(value) for value in values)
+
+
 def print_results(loss, valid_result, test_result):
     result_str = ''
     """output the evaluation results."""
@@ -642,34 +650,34 @@ def print_results(loss, valid_result, test_result):
         logging.info("[Train]: loss: {:.4f}".format(loss))
     if valid_result is not None: 
         logging.info("[Valid]: Recall: {} NDCG: {} MRR: {} Precision: {}".format(
-                            '-'.join([str(x) for x in valid_result[0]]), 
-                            '-'.join([str(x) for x in valid_result[1]]), 
-                            '-'.join([str(x) for x in valid_result[2]]), 
-                            '-'.join([str(x) for x in valid_result[3]])))
+                            _metric_list_text(valid_result[0]),
+                            _metric_list_text(valid_result[1]),
+                            _metric_list_text(valid_result[2]),
+                            _metric_list_text(valid_result[3])))
                 # result_str += 'Top-10\n'
-        result_str += 'Recall@10\t' + str(valid_result[0][0]) + '\n'
-        result_str += 'NDCG@10\t' + str(valid_result[1][0]) + '\n'
+        result_str += 'Recall@10\t' + _metric_text(valid_result[0][0]) + '\n'
+        result_str += 'NDCG@10\t' + _metric_text(valid_result[1][0]) + '\n'
         # result_str += 'Top-20\n'
-        result_str += 'Recall@20\t' + str(valid_result[0][1]) + '\n'
-        result_str += 'NDCG@20\t' + str(valid_result[1][1]) + '\n'
+        result_str += 'Recall@20\t' + _metric_text(valid_result[0][1]) + '\n'
+        result_str += 'NDCG@20\t' + _metric_text(valid_result[1][1]) + '\n'
         # result_str += 'Top-50\n'
-        result_str += 'Recall@50\t' + str(valid_result[0][2]) + '\n'
-        result_str += 'NDCG@50\t' + str(valid_result[1][2]) + '\n'
+        result_str += 'Recall@50\t' + _metric_text(valid_result[0][2]) + '\n'
+        result_str += 'NDCG@50\t' + _metric_text(valid_result[1][2]) + '\n'
     if test_result is not None: 
         logging.info("[Test]: Recall: {} NDCG: {} MRR: {} Precision: {}".format(
-                            '-'.join([str(x) for x in test_result[0]]), 
-                            '-'.join([str(x) for x in test_result[1]]), 
-                            '-'.join([str(x) for x in test_result[2]]), 
-                            '-'.join([str(x) for x in test_result[3]])))
+                            _metric_list_text(test_result[0]),
+                            _metric_list_text(test_result[1]),
+                            _metric_list_text(test_result[2]),
+                            _metric_list_text(test_result[3])))
         
         # result_str += 'Top-10\n'
-        result_str += 'Recall@10\t' + str(test_result[0][0]) + '\n'
-        result_str += 'NDCG@10\t' + str(test_result[1][0]) + '\n'
+        result_str += 'Recall@10\t' + _metric_text(test_result[0][0]) + '\n'
+        result_str += 'NDCG@10\t' + _metric_text(test_result[1][0]) + '\n'
         # result_str += 'Top-20\n'
-        result_str += 'Recall@20\t' + str(test_result[0][1]) + '\n'
-        result_str += 'NDCG@20\t' + str(test_result[1][1]) + '\n'
+        result_str += 'Recall@20\t' + _metric_text(test_result[0][1]) + '\n'
+        result_str += 'NDCG@20\t' + _metric_text(test_result[1][1]) + '\n'
         # result_str += 'Top-50\n'
-        result_str += 'Recall@50\t' + str(test_result[0][2]) + '\n'
-        result_str += 'NDCG@50\t' + str(test_result[1][2]) + '\n'
+        result_str += 'Recall@50\t' + _metric_text(test_result[0][2]) + '\n'
+        result_str += 'NDCG@50\t' + _metric_text(test_result[1][2]) + '\n'
 
     return result_str

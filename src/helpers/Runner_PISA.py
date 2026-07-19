@@ -330,11 +330,16 @@ class Runner_PISA:
         if snap_idx == 0:
             num_epoch = self.epoch
 
-        best_recall = 0
+        validation_interval_epochs = utils.get_validation_interval_epochs(num_epoch)
+        early_stop_patience = args.early_stop_patience
+        best_recall = -np.inf
         best_epoch = 0
-        patience = 20
-        cnt = 0
         model.forward_flag = step_flag
+        logging.info(
+            'Early stopping: validation_interval_epochs=%d, patience=%d epochs (0 disables).',
+            validation_interval_epochs,
+            early_stop_patience,
+        )
         self._debug_parity(
             f'[PISAParity] start snap_idx={snap_idx} step_flag={step_flag} '
             f'fast_sampler={getattr(args, "fast_sampler", 1)} '
@@ -344,6 +349,8 @@ class Runner_PISA:
             f'vectorized_eval={getattr(args, "vectorized_eval", 0)} '
             f'pisa_kmeans_seed_mode={self.pisa_kmeans_seed_mode} '
             f'pisa_aux_optimizer_mode={getattr(args, "pisa_aux_optimizer_mode", "reuse")} '
+            f'validation_interval_epochs={validation_interval_epochs} '
+            f'early_stop_patience={early_stop_patience} '
             f'shuffle={int(self.shuffle)}'
         )
 
@@ -358,31 +365,47 @@ class Runner_PISA:
                 exit()
 
             # Validation and early stopping
-            eval_step = args.eval_step # pisa default value 2
-            patience_start_step = 0 # pisa default value 20
-            if epoch >= 0 and (epoch + 1) % eval_step == 0:
-                #v_results = Inference.Test(args, model, corpus, 'val', snap_idx)
-                v_results = Inference.Test_excl_cold_selected(args, model, val_loads, hist_loads, lite=True, label='val-lite')
-                # gc.collect()
-                current_recall = v_results[0][1]
-                improved = current_recall > best_recall
-                if improved:
-                    best_epoch = epoch + 1
-                    best_recall = current_recall
-                    save_path = f'_forward_snap{snap_idx}' if (step_flag == 0 and 'plasticity' in self.dyn_method) else f'_snap{snap_idx}'
-                    model.save_model(add_path=save_path)
-                    cnt = 0
-                else:
-                    if epoch + 1 > patience_start_step:
-                        cnt += eval_step
-                        if cnt >= patience:
-                            break
-                self._debug_parity(
-                    f'[PISAParity] validation snap_idx={snap_idx} step_flag={step_flag} '
-                    f'epoch={epoch} recall@20={current_recall:.8f} '
-                    f'best_recall@20={best_recall:.8f} best_epoch={best_epoch} '
-                    f'improved={int(improved)}'
+            completed_epochs = epoch + 1
+            should_validate = (
+                completed_epochs % validation_interval_epochs == 0
+                or completed_epochs == num_epoch
+            )
+            if not should_validate:
+                continue
+
+            v_results = Inference.Test_excl_cold_selected(
+                args, model, val_loads, hist_loads, lite=True, label='val-lite'
+            )
+            current_recall = v_results[0][1]
+            improved = current_recall > best_recall
+            should_stop = False
+            if improved:
+                best_epoch = completed_epochs
+                best_recall = current_recall
+                save_path = f'_forward_snap{snap_idx}' if (step_flag == 0 and 'plasticity' in self.dyn_method) else f'_snap{snap_idx}'
+                model.save_model(add_path=save_path)
+            else:
+                epochs_without_improvement = completed_epochs - best_epoch
+                should_stop = (
+                    early_stop_patience > 0
+                    and epochs_without_improvement >= early_stop_patience
                 )
+            self._debug_parity(
+                f'[PISAParity] validation snap_idx={snap_idx} step_flag={step_flag} '
+                f'epoch={epoch} recall@20={current_recall:.8f} '
+                f'best_recall@20={best_recall:.8f} best_epoch={best_epoch} '
+                f'improved={int(improved)}'
+            )
+            if should_stop:
+                logging.info(
+                    'Early stopping at epoch %d: Recall@20 did not improve for %d epochs '
+                    '(best=%.8f at epoch %d).',
+                    completed_epochs,
+                    epochs_without_improvement,
+                    best_recall,
+                    best_epoch,
+                )
+                break
 
         logging.info(f"Training complete. Best validation epoch: {best_epoch:03d}")
         self._debug_parity(

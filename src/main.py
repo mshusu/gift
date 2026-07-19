@@ -40,7 +40,12 @@ def parse_global_args(parser):
 
     parser.add_argument('--force_train', action='store_true', help='when the param occurs, \
                         train model from scratch instead of reusing exsited model of file')
-    parser.add_argument('--eval_step', type=int, default=2)
+    parser.add_argument(
+        '--early_stop_patience',
+        type=int,
+        default=50,
+        help='Epochs allowed without validation improvement; 0 disables early stopping.',
+    )
     parser.add_argument('--fast_sampler', type=int, default=1,
                         help='Use batched negative sampling in the DataLoader. Enabled by default.')
     parser.add_argument('--legacy_aux_neg_sampler', type=int, default=-1,
@@ -284,6 +289,8 @@ if __name__ == '__main__':
     if extras:
         print(f'Warning: ignored unknown CLI args: {extras}', flush=True)
     args.unknown_cli_args = extras
+    if args.early_stop_patience < 0:
+        parser.error('--early_stop_patience must be non-negative')
 
     if init_args.dyn_method == 'finetune':
         pass

@@ -224,9 +224,15 @@ class Runner(object):
             num_epoch = self.epoch
             shuffle = self.shuffle
 
-        cnt = 0
-        best_recall = 0
+        validation_interval_epochs = utils.get_validation_interval_epochs(num_epoch)
+        early_stop_patience = args.early_stop_patience
+        best_recall = -np.inf
         best_epoch = 0
+        logging.info(
+            'Early stopping: validation_interval_epochs=%d, patience=%d epochs (0 disables).',
+            validation_interval_epochs,
+            early_stop_patience,
+        )
 
         titer = tqdm(range(num_epoch), ncols=300)
         for epoch in titer:
@@ -241,41 +247,38 @@ class Runner(object):
                 logging.info('NaN loss, stop training')
                 break
 
-
-            if 'finetune' in self.dyn_method or 'newtrain' in self.dyn_method:
-                early_stop = 0
-                patience = 20
-                minimum = 0
-                if snap_idx == 0:
-                    early_stop = 20
-                    patience = 20
-                    minimum = 0
-            elif 'fulltrain' in self.dyn_method or 'pretrain' in self.dyn_method:
-                early_stop = 20
-                patience = 20
-                minimum = 0
-                
-            a = 0
-            b = 1
-
             # Validation and early stopping
-            eval_step = args.eval_step # pisa default value 2
-            patience_start_step = 0 # pisa default value 20
-            if  (epoch) >= minimum and (epoch+1) % eval_step == 0:
-                #v_results = Inference.Test(args, model, corpus, 'val', snap_idx)
-                v_results = Inference.Test_excl_cold_selected(args, model, val_loads, hist_loads, lite=True, label='val-lite')
-                # gc.collect()
-                #Inference.print_results(None, v_results, None)
-                if v_results[a][b] > best_recall:
-                    best_epoch = epoch+1
-                    best_recall = v_results[a][b] # top-10 or top-20
-                    model.save_model(add_path='_snap{}'.format(snap_idx))
-                    cnt = 0
-                else:
-                    if epoch + 1 > patience_start_step:
-                        cnt += eval_step
-                        if cnt >= patience:
-                            break
+            completed_epochs = epoch + 1
+            should_validate = (
+                completed_epochs % validation_interval_epochs == 0
+                or completed_epochs == num_epoch
+            )
+            if not should_validate:
+                continue
+
+            v_results = Inference.Test_excl_cold_selected(
+                args, model, val_loads, hist_loads, lite=True, label='val-lite'
+            )
+            current_recall = v_results[0][1]
+            if current_recall > best_recall:
+                best_epoch = completed_epochs
+                best_recall = current_recall
+                model.save_model(add_path='_snap{}'.format(snap_idx))
+            else:
+                epochs_without_improvement = completed_epochs - best_epoch
+                if (
+                    early_stop_patience > 0
+                    and epochs_without_improvement >= early_stop_patience
+                ):
+                    logging.info(
+                        'Early stopping at epoch %d: Recall@20 did not improve for %d epochs '
+                        '(best=%.8f at epoch %d).',
+                        completed_epochs,
+                        epochs_without_improvement,
+                        best_recall,
+                        best_epoch,
+                    )
+                    break
         
         logging.info("End train and valid. Best validation epoch is {:03d}.".format(best_epoch))
         model.load_model(model.model_path+'_snap{}'.format(snap_idx))

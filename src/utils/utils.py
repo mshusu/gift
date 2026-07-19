@@ -92,6 +92,13 @@ def build_data_loader(dataset, batch_size, shuffle, num_workers, pin_memory,
         loader_kwargs['prefetch_factor'] = prefetch_factor
     return torch.utils.data.DataLoader(dataset, **loader_kwargs)
 
+
+def get_validation_interval_epochs(num_epoch, max_validations=50):
+    """Choose an epoch interval that performs at most max_validations checks."""
+    if max_validations <= 0:
+        raise ValueError('max_validations must be positive')
+    return max(1, (num_epoch + max_validations - 1) // max_validations)
+
 def squeeze_dict(batch: dict, dim=0) -> dict:
     for c in batch:
         if not torch.is_tensor(batch[c]):
