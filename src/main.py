@@ -71,13 +71,6 @@ def parse_global_args(parser):
     return parser
 
 
-def cli_arg_provided(name):
-    return any(
-        arg == name or arg.startswith(name + '=')
-        for arg in sys.argv[1:]
-    )
-
-
 def test_file(args, corpus, test_type):
     d = {}
     for idx in range(corpus.n_snapshots):
@@ -317,24 +310,27 @@ if __name__ == '__main__':
     
     log_args1 = [args.dataset, args.s_fname]
     log_args2 = [init_args.model_name, init_args.dyn_method]
-    if hasattr(args, 'strefreq_alpha') and cli_arg_provided('--strefreq_alpha'):
-        log_args2.append(str(args.strefreq_alpha))
     if 'globalinfocontent' in init_args.dyn_method:
+        log_args2.append(str(args.strefreq_alpha))
+        log_args2.append(args.gitf_weight_mode)
         print(f'GI weight mode: {args.gitf_weight_mode}')
     log_args3 = []
 
+    base_path_params = [
+        'lr', 'l2', 'epoch', 'tepoch', 'num_neg', 'random_seed',
+        'shuffle', 'neg_sampling_pool',
+    ]
 
-    params = ['lr','l2','epoch','tepoch','num_neg','random_seed']
+    args.pretrain_model_path = get_pretrain_model_path(
+        args, log_args1, ['LGN', 'pretrain'], base_path_params
+    )
 
-    args.pretrain_model_path = get_pretrain_model_path(args, log_args1, ['LGN', 'pretrain'], params)
-
+    params = list(base_path_params)
     if 'PISA' in init_args.model_name:
-        params = ['lr','l2','epoch','tepoch','num_neg','random_seed','bound_weight','ratio'] ###
+        params += ['bound_weight', 'ratio']
 
     for arg in params:
         log_args3.append(arg + '=' + str(eval('args.' + arg)))
-    if args.neg_sampling_pool != 'current':
-        log_args3.append('neg_sampling_pool=' + args.neg_sampling_pool)
 
     log_file_name1 = '__'.join(log_args1).replace(' ', '__')
     log_file_name2 = '__'.join(log_args2).replace(' ', '__')
@@ -369,7 +365,7 @@ if __name__ == '__main__':
     main()
 
     # 
-    if hasattr(args, 'strefreq_alpha') and cli_arg_provided('--strefreq_alpha'):
+    if 'globalinfocontent' in init_args.dyn_method:
         # print metric, remove model file to save space
         print(f"\n alpha = {args.strefreq_alpha}")
         print(f"\n test res directory = {args.test_result_file}")
