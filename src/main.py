@@ -164,17 +164,42 @@ def main():
         #     print('Time idx 0 pretrained model exist. skip both pretraining and test')
         #     continue
         
-        print('pretrain model path:',args.pretrain_model_path+'_snap0')
-        #if idx == 0 and not os.path.exists(args.model_path+'_snap0') and os.path.exists(args.pretrain_model_path+'_snap0') and force_train == False:
-        if idx == 0 and os.path.exists(args.pretrain_model_path+'_snap0') and force_train == False:
+        pretrain_snap0 = args.pretrain_model_path + '_snap0'
+        model_snap0 = args.model_path + '_snap0'
+        requires_lgn_pretrain_stage0 = (
+            args.model_name in {'PISA_LGN', 'Contrastive_LGN'} and idx == 0
+        )
+        stage_force_train = force_train
+
+        print('pretrain model path:', pretrain_snap0)
+        if requires_lgn_pretrain_stage0:
+            if not os.path.exists(pretrain_snap0):
+                raise FileNotFoundError(
+                    f'{args.model_name} requires the pretrained LGN checkpoint: '
+                    f'{pretrain_snap0}'
+                )
+
+            print(f'Time idx 0 uses the pretrained LGN model for {args.model_name}')
+            if os.path.abspath(model_snap0) != os.path.abspath(pretrain_snap0):
+                shutil.copy(pretrain_snap0, model_snap0)
+            if force_train:
+                print(
+                    f'--force_train is ignored for {args.model_name} '
+                    'at time stage 0'
+                )
+            stage_force_train = False
+        elif (
+            args.model_name == 'LGN'
+            and idx == 0
+            and ('finetune' in args.dyn_method or 'fulltrain' in args.dyn_method)
+            and os.path.exists(pretrain_snap0)
+            and not force_train
+        ):
             print('Time idx 0 pretrained model exist. Copy the pretrained model to the model path')
-            # copy the pretrained model to the model path
-            # how to copy the file
-            # if the model_path is pretrain_model_path, pass
-            if args.model_path == args.pretrain_model_path:
+            if os.path.abspath(model_snap0) == os.path.abspath(pretrain_snap0):
                 print('model_path is pretrain_model_path, pass')
             else:
-                shutil.copy(args.pretrain_model_path+'_snap0', args.model_path+'_snap0')
+                shutil.copy(pretrain_snap0, model_snap0)
 
 
         if idx > 0 and args.model_name != "LGN":
@@ -184,11 +209,11 @@ def main():
         torch.cuda.empty_cache()
         if 'plasticity' in args.dyn_method:
             # Pure fine-tuning
-            _ = runner.train(model, data_dict, args, corpus, prev_data, idx, force_train, 0)
+            _ = runner.train(model, data_dict, args, corpus, prev_data, idx, stage_force_train, 0)
             # PISA
-            best_epoch = runner.train(model, data_dict, args, corpus, prev_data, idx, force_train, 1)
+            best_epoch = runner.train(model, data_dict, args, corpus, prev_data, idx, stage_force_train, 1)
         else:
-            best_epoch = runner.train(model, data_dict, args, corpus, prev_data, idx, force_train)
+            best_epoch = runner.train(model, data_dict, args, corpus, prev_data, idx, stage_force_train)
         #time_d['period_{}'.format(idx)] = t
         best_epoch_d['period_{}'.format(idx)] = best_epoch
         #best_epoch_list.append(best_epoch)
