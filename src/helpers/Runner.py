@@ -65,9 +65,9 @@ class Runner(object):
         self.optimizer_name = args.optimizer
         self.num_workers = args.num_workers
         self.pin_memory = args.pin_memory
-        self.persistent_workers = getattr(args, 'persistent_workers', 1)
-        self.prefetch_factor = getattr(args, 'prefetch_factor', 4)
-        self.shuffle = bool(getattr(args, 'shuffle', 1))
+        self.persistent_workers = args.persistent_workers
+        self.prefetch_factor = args.prefetch_factor
+        self.shuffle = bool(args.shuffle)
         self.result_file = args.result_file
         self.dyn_method = args.dyn_method
         self.time = None  # will store [start_time, last_step_time]
@@ -106,16 +106,15 @@ class Runner(object):
 
     def write_results_excl_cold(self, model, args, snap_idx, test_loads, val_loads, hist_loads, option=''):
         """Write validation and test results to files and save metrics in JSON format."""
-        compare_flag = getattr(args, 'compare_vectorized_eval', None)
-        vectorized_flag = getattr(args, 'vectorized_eval', None)
+        vectorized_flag = args.vectorized_eval
         eval_msg = (
-            f'Eval flags: compare_vectorized_eval={compare_flag}, '
-            f'vectorized_eval={vectorized_flag}, snap_idx={snap_idx}, option={option}'
+            f'Eval flags: vectorized_eval={vectorized_flag}, '
+            f'snap_idx={snap_idx}, option={option}'
         )
         print(eval_msg, flush=True)
         logging.info(eval_msg)
-        val_results = Inference.Test_excl_cold_selected(args, model, val_loads, hist_loads, label='val')
-        test_results = Inference.Test_excl_cold_selected(args, model, test_loads, hist_loads, label='test')
+        val_results = Inference.Test_excl_cold_selected(args, model, val_loads, hist_loads)
+        test_results = Inference.Test_excl_cold_selected(args, model, test_loads, hist_loads)
         logging.info("Trained model testing")
 
         # Save validation results
@@ -257,7 +256,7 @@ class Runner(object):
                 continue
 
             v_results = Inference.Test_excl_cold_selected(
-                args, model, val_loads, hist_loads, lite=True, label='val-lite'
+                args, model, val_loads, hist_loads, lite=True
             )
             current_recall = v_results[0][1]
             if current_recall > best_recall:

@@ -44,16 +44,16 @@ class Runner_PISA:
         self.optimizer_name = args.optimizer
         self.num_workers = args.num_workers
         self.pin_memory = args.pin_memory
-        self.persistent_workers = getattr(args, 'persistent_workers', 1)
-        self.prefetch_factor = getattr(args, 'prefetch_factor', 4)
-        self.shuffle = bool(getattr(args, 'shuffle', 1))
+        self.persistent_workers = args.persistent_workers
+        self.prefetch_factor = args.prefetch_factor
+        self.shuffle = bool(args.shuffle)
         self.result_file = args.result_file
         self.dyn_method = args.dyn_method
         self.test_result_file = args.test_result_file
         self.tepoch = args.tepoch
-        self.pisa_debug_parity = bool(getattr(args, 'pisa_debug_parity', 0))
-        self.random_seed = getattr(args, 'random_seed', 0)
-        self.pisa_kmeans_seed_mode = getattr(args, 'pisa_kmeans_seed_mode', 'global')
+        self.pisa_debug_parity = bool(args.pisa_debug_parity)
+        self.random_seed = args.random_seed
+        self.pisa_kmeans_seed_mode = args.pisa_kmeans_seed_mode
         self.time = None
         self.snap_boundaries = corpus.snap_boundaries
         self.snapshots_path = corpus.snapshots_path
@@ -62,13 +62,6 @@ class Runner_PISA:
         if self.pisa_debug_parity:
             print(msg, flush=True)
             logging.info(msg)
-
-    def _effective_legacy_neg_sampler(self, args):
-        legacy_flag = getattr(args, 'legacy_aux_neg_sampler', -1)
-        legacy_models = {'PISA_LGN', 'Contrastive_LGN'}
-        if legacy_flag < 0:
-            return int(getattr(args, 'model_name', '') in legacy_models)
-        return int(bool(legacy_flag) and getattr(args, 'model_name', '') in legacy_models)
 
     def _load_checkpoint(self, model_path, device):
         if torch.cuda.is_available():
@@ -189,7 +182,7 @@ class Runner_PISA:
     def _configure_aux_optimizer(self, model, args, snap_idx, step_flag):
         if step_flag <= 0:
             return
-        mode = getattr(args, 'pisa_aux_optimizer_mode', 'reuse')
+        mode = args.pisa_aux_optimizer_mode
         if mode == 'reuse':
             return
         if mode == 'reset':
@@ -215,16 +208,15 @@ class Runner_PISA:
     
     def write_results_excl_cold(self, model, args, snap_idx, test_loads, val_loads, hist_loads, option=''):
         """Write validation and test results to files and save metrics in JSON format."""
-        compare_flag = getattr(args, 'compare_vectorized_eval', None)
-        vectorized_flag = getattr(args, 'vectorized_eval', None)
+        vectorized_flag = args.vectorized_eval
         eval_msg = (
-            f'Eval flags: compare_vectorized_eval={compare_flag}, '
-            f'vectorized_eval={vectorized_flag}, snap_idx={snap_idx}, option={option}'
+            f'Eval flags: vectorized_eval={vectorized_flag}, '
+            f'snap_idx={snap_idx}, option={option}'
         )
         print(eval_msg, flush=True)
         logging.info(eval_msg)
-        val_results = Inference.Test_excl_cold_selected(args, model, val_loads, hist_loads, label='val')
-        test_results = Inference.Test_excl_cold_selected(args, model, test_loads, hist_loads, label='test')
+        val_results = Inference.Test_excl_cold_selected(args, model, val_loads, hist_loads)
+        test_results = Inference.Test_excl_cold_selected(args, model, test_loads, hist_loads)
         logging.info("Trained model testing")
 
         # Save validation results
@@ -342,13 +334,12 @@ class Runner_PISA:
         )
         self._debug_parity(
             f'[PISAParity] start snap_idx={snap_idx} step_flag={step_flag} '
-            f'fast_sampler={getattr(args, "fast_sampler", 1)} '
-            f'legacy_aux_neg_sampler={getattr(args, "legacy_aux_neg_sampler", 0)} '
-            f'legacy_neg_sampler_effective={self._effective_legacy_neg_sampler(args)} '
-            f'legacy_pisa_aux_loss={getattr(args, "legacy_pisa_aux_loss", 0)} '
-            f'vectorized_eval={getattr(args, "vectorized_eval", 0)} '
+            f'fast_sampler={args.fast_sampler} '
+            f'legacy_aux_neg_sampler={args.legacy_aux_neg_sampler} '
+            f'legacy_pisa_aux_loss={args.legacy_pisa_aux_loss} '
+            f'vectorized_eval={args.vectorized_eval} '
             f'pisa_kmeans_seed_mode={self.pisa_kmeans_seed_mode} '
-            f'pisa_aux_optimizer_mode={getattr(args, "pisa_aux_optimizer_mode", "reuse")} '
+            f'pisa_aux_optimizer_mode={args.pisa_aux_optimizer_mode} '
             f'validation_interval_epochs={validation_interval_epochs} '
             f'early_stop_patience={early_stop_patience} '
             f'shuffle={int(self.shuffle)}'
@@ -374,7 +365,7 @@ class Runner_PISA:
                 continue
 
             v_results = Inference.Test_excl_cold_selected(
-                args, model, val_loads, hist_loads, lite=True, label='val-lite'
+                args, model, val_loads, hist_loads, lite=True
             )
             current_recall = v_results[0][1]
             improved = current_recall > best_recall
@@ -432,7 +423,7 @@ class Runner_PISA:
 
         # gc.collect()
         # torch.cuda.empty_cache()
-        use_fast_loader = bool(getattr(data.args, 'fast_sampler', 1))
+        use_fast_loader = bool(data.args.fast_sampler)
         if use_fast_loader:
             dl = utils.build_data_loader(
                 data,
@@ -455,8 +446,7 @@ class Runner_PISA:
             f'[PISAParity] loader snap_idx={snap_idx} step_flag={model.forward_flag} '
             f'epoch={model.epoch} loader={loader_mode} '
             f'fast_collate={int(getattr(data, "_use_fast_collate", False))} '
-            f'legacy_aux_neg_sampler={getattr(data.args, "legacy_aux_neg_sampler", 0)} '
-            f'legacy_neg_sampler_effective={int(data._use_legacy_aux_neg_sampling()) if hasattr(data, "_use_legacy_aux_neg_sampling") else 0} '
+            f'legacy_aux_neg_sampler={data.args.legacy_aux_neg_sampler} '
             f'num_workers={self.num_workers} persistent_workers={self.persistent_workers} '
             f'shuffle={int(bool(shuffle))}'
         )

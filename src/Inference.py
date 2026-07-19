@@ -4,14 +4,6 @@ import os
 from utils import utils
 import math
 import logging
-from time import perf_counter
-
-
-def _sync_if_cuda(device):
-    if device is not None and torch.cuda.is_available():
-        device = torch.device(device)
-        if device.type == 'cuda':
-            torch.cuda.synchronize(device)
 
 def computeTopNAccuracy(GroundTruth, predictedIndices, topN):
     precision = [] 
@@ -155,7 +147,7 @@ def Test_group(args, model, corpus, data_type, data_idx, group_files):
             e.g., {"dynamic": "dynamic_users.txt", "static": "static_users.txt", "intermediate": "intermediate_users.txt"}
     """
 
-    batch_size = args.eval_batch_size if getattr(args, 'eval_batch_size', 0) > 0 else args.batch_size
+    batch_size = args.eval_batch_size if args.eval_batch_size > 0 else args.batch_size
     model.eval()
 
     # Load user groups from files
@@ -249,7 +241,7 @@ def Test_group(args, model, corpus, data_type, data_idx, group_files):
 
 # inference incl. cold user & cold item, their embedding are random.
 def Test(args, model, corpus, data_type, data_idx):
-    batch_size = args.eval_batch_size if getattr(args, 'eval_batch_size', 0) > 0 else args.batch_size
+    batch_size = args.eval_batch_size if args.eval_batch_size > 0 else args.batch_size
     model.eval()
 
     #data_type = 'val'
@@ -340,10 +332,7 @@ def Test(args, model, corpus, data_type, data_idx):
 
 # inference excl. cold user & cold item
 def Test_excl_cold(args, model, test_loads, hist_loads, lite = False):
-    if getattr(args, 'compare_vectorized_eval', 0) and not getattr(args, '_eval_compare_active', False):
-        return Test_excl_cold_selected(args, model, test_loads, hist_loads, lite=lite, label='direct')
-
-    batch_size = args.eval_batch_size if getattr(args, 'eval_batch_size', 0) > 0 else args.batch_size
+    batch_size = args.eval_batch_size if args.eval_batch_size > 0 else args.batch_size
     model.eval()
     device = model._device
 
@@ -448,7 +437,7 @@ def _flatten_user_item_pairs(user_items, users, item_mapping, device):
 
 
 def Test_excl_cold_vectorized(args, model, test_loads, hist_loads, lite=False):
-    batch_size = args.eval_batch_size if getattr(args, 'eval_batch_size', 0) > 0 else args.batch_size
+    batch_size = args.eval_batch_size if args.eval_batch_size > 0 else args.batch_size
     model.eval()
     device = model._device
 
@@ -565,71 +554,8 @@ def Test_excl_cold_vectorized(args, model, test_loads, hist_loads, lite=False):
         return results['recall'], results['ndcg'], results['mrr'], results['precision']
 
 
-def Test_excl_cold_selected(args, model, test_loads, hist_loads, lite=False, label=''):
-    if getattr(args, 'compare_vectorized_eval', 0):
-        start_msg = f'[EvalCompare:{label}] start lite={lite}'
-        print(start_msg, flush=True)
-        logging.info(start_msg)
-        had_compare_active = hasattr(args, '_eval_compare_active')
-        previous_compare_active = getattr(args, '_eval_compare_active', False)
-        args._eval_compare_active = True
-        order_num = int(np.random.randint(0, 2))
-        order = 'old_first' if order_num % 2 else 'vectorized_first'
-        try:
-            if order_num % 2:
-                _sync_if_cuda(getattr(model, '_device', None))
-                old_start = perf_counter()
-                old_results = Test_excl_cold(args, model, test_loads, hist_loads, lite=lite)
-                _sync_if_cuda(getattr(model, '_device', None))
-                old_time = perf_counter() - old_start
-
-                _sync_if_cuda(getattr(model, '_device', None))
-                vec_start = perf_counter()
-                vec_results = Test_excl_cold_vectorized(args, model, test_loads, hist_loads, lite=lite)
-                _sync_if_cuda(getattr(model, '_device', None))
-                vec_time = perf_counter() - vec_start
-            else:
-                _sync_if_cuda(getattr(model, '_device', None))
-                vec_start = perf_counter()
-                vec_results = Test_excl_cold_vectorized(args, model, test_loads, hist_loads, lite=lite)
-                _sync_if_cuda(getattr(model, '_device', None))
-                vec_time = perf_counter() - vec_start
-
-                _sync_if_cuda(getattr(model, '_device', None))
-                old_start = perf_counter()
-                old_results = Test_excl_cold(args, model, test_loads, hist_loads, lite=lite)
-                _sync_if_cuda(getattr(model, '_device', None))
-                old_time = perf_counter() - old_start
-        finally:
-            if had_compare_active:
-                args._eval_compare_active = previous_compare_active
-            else:
-                delattr(args, '_eval_compare_active')
-        diffs = []
-        for old_metric, vec_metric in zip(old_results, vec_results):
-            if old_metric is None or vec_metric is None:
-                continue
-            diffs.extend(np.abs(np.asarray(old_metric) - np.asarray(vec_metric)).tolist())
-        max_diff = max(diffs) if diffs else 0.0
-        test_user_clicked_list, testUsers, _ = test_loads
-        _, hist_users_list, hist_unique_items = hist_loads
-        hist_users_set = set(hist_users_list)
-        valid_users = [u for u in testUsers if u in hist_users_set]
-        gt_pairs = sum(len(set(test_user_clicked_list[u])) for u in valid_users)
-        speedup = old_time / vec_time if vec_time > 0 else float('inf')
-        msg = (
-            f'[EvalCompare:{label}] lite={lite} valid_users={len(valid_users)} '
-            f'target_items={len(hist_unique_items)} gt_pairs={gt_pairs} '
-            f'order_num={order_num} order={order} '
-            f'old_time={old_time:.4f}s vectorized_time={vec_time:.4f}s '
-            f'speedup={speedup:.2f}x '
-            f'max_abs_diff={max_diff:.8f} old={old_results} vectorized={vec_results}'
-        )
-        print(msg, flush=True)
-        logging.info(msg)
-        return old_results
-
-    if getattr(args, 'vectorized_eval', 0):
+def Test_excl_cold_selected(args, model, test_loads, hist_loads, lite=False):
+    if args.vectorized_eval:
         return Test_excl_cold_vectorized(args, model, test_loads, hist_loads, lite=lite)
 
     return Test_excl_cold(args, model, test_loads, hist_loads, lite=lite)

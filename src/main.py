@@ -48,8 +48,8 @@ def parse_global_args(parser):
     )
     parser.add_argument('--fast_sampler', type=int, default=1,
                         help='Use batched negative sampling in the DataLoader. Enabled by default.')
-    parser.add_argument('--legacy_aux_neg_sampler', type=int, default=-1,
-                        help='Use original per-user negative sampler for PISA/Contrastive. -1=auto, 0=off, 1=on.')
+    parser.add_argument('--legacy_aux_neg_sampler', type=int, default=0, choices=[0, 1],
+                        help='Use the original per-user negative sampler instead of batched sampling.')
     parser.add_argument('--persistent_workers', type=int, default=1,
                         help='Keep DataLoader workers alive between epochs when num_workers > 0.')
     parser.add_argument('--prefetch_factor', type=int, default=4,
@@ -58,12 +58,18 @@ def parse_global_args(parser):
                         help='Batch size for evaluation. Defaults to --batch_size when <= 0.')
     parser.add_argument('--shuffle', type=int, default=1,
                         help='Shuffle training DataLoader batches.')
-    parser.add_argument('--vectorized_eval', type=int, default=0,
+    parser.add_argument('--vectorized_eval', type=int, default=1,
                         help='Use vectorized Test_excl_cold implementation.')
-    parser.add_argument('--compare_vectorized_eval', type=int, default=0,
-                        help='Run old and vectorized Test_excl_cold and print metric diffs.')
     
     return parser
+
+
+def cli_arg_provided(name):
+    return any(
+        arg == name or arg.startswith(name + '=')
+        for arg in sys.argv[1:]
+    )
+
 
 def test_file(args, corpus, test_type):
     d = {}
@@ -304,7 +310,7 @@ if __name__ == '__main__':
     
     log_args1 = [args.dataset, args.s_fname]
     log_args2 = [init_args.model_name, init_args.dyn_method]
-    if hasattr(args, 'strefreq_alpha'):
+    if hasattr(args, 'strefreq_alpha') and cli_arg_provided('--strefreq_alpha'):
         log_args2.append(str(args.strefreq_alpha))
     if 'globalinfocontent' in init_args.dyn_method:
         print(f'GI weight mode: {args.gitf_weight_mode}')
@@ -345,11 +351,7 @@ if __name__ == '__main__':
     logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
     if args.unknown_cli_args:
         logging.warning('Ignored unknown CLI args: {}'.format(args.unknown_cli_args))
-    if getattr(args, 'compare_vectorized_eval', 0):
-        msg = 'Vectorized eval comparison enabled: old evaluator will be returned, vectorized evaluator will be checked.'
-        print(msg, flush=True)
-        logging.info(msg)
-    elif getattr(args, 'vectorized_eval', 0):
+    if args.vectorized_eval:
         msg = 'Vectorized eval enabled.'
         print(msg, flush=True)
         logging.info(msg)
@@ -358,7 +360,7 @@ if __name__ == '__main__':
     main()
 
     # 
-    if hasattr(args, 'strefreq_alpha'):
+    if hasattr(args, 'strefreq_alpha') and cli_arg_provided('--strefreq_alpha'):
         # print metric, remove model file to save space
         print(f"\n alpha = {args.strefreq_alpha}")
         print(f"\n test res directory = {args.test_result_file}")

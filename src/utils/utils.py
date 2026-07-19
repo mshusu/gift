@@ -75,14 +75,14 @@ def batch_to_gpu(batch: dict, device) -> dict:
 
 
 def build_data_loader(dataset, batch_size, shuffle, num_workers, pin_memory,
-                      persistent_workers=False, prefetch_factor=4):
+                      persistent_workers, prefetch_factor):
     loader_kwargs = {
         'batch_size': batch_size,
         'shuffle': shuffle,
         'num_workers': num_workers,
         'pin_memory': bool(pin_memory),
     }
-    use_fast_collate = getattr(dataset.args, 'fast_sampler', 1) and hasattr(dataset, 'collate_batch')
+    use_fast_collate = dataset.args.fast_sampler and hasattr(dataset, 'collate_batch')
     if hasattr(dataset, '_use_fast_collate'):
         dataset._use_fast_collate = bool(use_fast_collate)
     if use_fast_collate:

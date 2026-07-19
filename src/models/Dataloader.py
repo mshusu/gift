@@ -73,7 +73,7 @@ class Dataset(BaseDataset):
         return self.train_data.shape[0]
 
     def __getitem__(self, index: int) -> dict:
-        if getattr(self.args, 'fast_sampler', 1) and self._use_fast_collate:
+        if self.args.fast_sampler and self._use_fast_collate:
             return index
         #current = self._get_feed_dict(index)
         current = self._get_feed_dict_fast(index)
@@ -84,7 +84,7 @@ class Dataset(BaseDataset):
         batch_data = self.train_data[indices]
         user_ids = batch_data[:, 0].astype(np.int64, copy=False)
         pos_items = batch_data[:, 1].astype(np.int64, copy=False)
-        if self._use_legacy_aux_neg_sampling():
+        if self.args.legacy_aux_neg_sampler:
             neg_items = np.stack(
                 [self._sample_neg_items_fast(int(user_id)).numpy() for user_id in user_ids],
                 axis=0,
@@ -100,15 +100,6 @@ class Dataset(BaseDataset):
             'user_id': torch.from_numpy(user_ids.reshape(-1, 1)),
             'item_id': torch.from_numpy(item_ids),
         }
-
-    def _use_legacy_aux_neg_sampling(self):
-        return getattr(self.args, 'legacy_aux_neg_sampler') 
-
-        legacy_flag = getattr(self.args, 'legacy_aux_neg_sampler', -1)
-        legacy_models = {'PISA_LGN', 'Contrastive_LGN'}
-        if legacy_flag < 0:
-            return getattr(self.args, 'model_name', '') in legacy_models
-        return bool(legacy_flag) and getattr(self.args, 'model_name', '') in legacy_models
 
     def _build_hist_pair_codes(self, hist_user_clicked_list):
         user_chunks, item_chunks = [], []

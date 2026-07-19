@@ -51,8 +51,6 @@ class Model(torch.nn.Module):
                             help='')
         parser.add_argument('--legacy_pisa_aux_loss', type=int, default=0,
                             help='Use the original PISA auxiliary loss implementation for parity debugging.')
-        parser.add_argument('--compare_pisa_aux_loss', type=int, default=0,
-                            help='Print loss differences between original and vectorized PISA auxiliary loss.')
         return parser
 
     @staticmethod
@@ -85,9 +83,7 @@ class Model(torch.nn.Module):
         self.temp = args.temp
         self.test_result_file = args.test_result_file
         self.forward_flag = 0
-        self.legacy_pisa_aux_loss = bool(getattr(args, 'legacy_pisa_aux_loss', 0))
-        self.compare_pisa_aux_loss = bool(getattr(args, 'compare_pisa_aux_loss', 0))
-        self._pisa_loss_compare_prints = 0
+        self.legacy_pisa_aux_loss = bool(args.legacy_pisa_aux_loss)
 
         self._define_params()
 
@@ -223,61 +219,13 @@ class Model(torch.nn.Module):
 
     def loss(self, data, current_data, prev_data, time_idx, prev_model, forward_model, reduction):
         if self.legacy_pisa_aux_loss:
-            losses = self._loss_legacy(data, current_data, prev_data, time_idx, prev_model, forward_model, reduction)
-            self._compare_pisa_aux_losses(
-                data, current_data, prev_data, time_idx, prev_model, forward_model, reduction,
-                losses, primary_name='legacy',
+            return self._loss_legacy(
+                data, current_data, prev_data, time_idx, prev_model, forward_model, reduction
             )
-            return losses
 
-        losses = self._loss_vectorized(data, current_data, prev_data, time_idx, prev_model, forward_model, reduction)
-        self._compare_pisa_aux_losses(
-            data, current_data, prev_data, time_idx, prev_model, forward_model, reduction,
-            losses, primary_name='vectorized',
+        return self._loss_vectorized(
+            data, current_data, prev_data, time_idx, prev_model, forward_model, reduction
         )
-        return losses
-
-    def _compare_pisa_aux_losses(self, data, current_data, prev_data, time_idx, prev_model, forward_model, reduction,
-                                 primary_losses, primary_name):
-        if not self.compare_pisa_aux_loss or self._pisa_loss_compare_prints >= 20:
-            return
-        if time_idx == 0 or (self.forward_flag == 0 and 'plasticity' in self.dyn_method):
-            return
-        if getattr(self, 'keep_prob', -1) > 0:
-            if self._pisa_loss_compare_prints == 0:
-                msg = '[PISALossCompare] skipped because keep_prob > 0 would consume random dropout masks'
-                print(msg, flush=True)
-                logging.info(msg)
-                self._pisa_loss_compare_prints += 1
-            return
-
-        with torch.no_grad():
-            if primary_name == 'legacy':
-                other_losses = self._loss_vectorized(
-                    data, current_data, prev_data, time_idx, prev_model, forward_model, reduction,
-                )
-                other_name = 'vectorized'
-            else:
-                other_losses = self._loss_legacy(
-                    data, current_data, prev_data, time_idx, prev_model, forward_model, reduction,
-                )
-                other_name = 'legacy'
-
-        primary_values = [float(loss.detach().cpu()) for loss in primary_losses]
-        other_values = [float(loss.detach().cpu()) for loss in other_losses]
-        diffs = [abs(primary - other) for primary, other in zip(primary_values, other_values)]
-        names = ['total', 'bpr', 'cl', 'plast', 'stab', 'plast_neigh', 'stab_neigh']
-        diff_msg = ' '.join(
-            f'{name}_diff={diff:.8f} {primary_name}_{name}={primary:.8f} {other_name}_{name}={other:.8f}'
-            for name, diff, primary, other in zip(names, diffs, primary_values, other_values)
-        )
-        msg = (
-            f'[PISALossCompare] epoch={self.epoch} forward_flag={self.forward_flag} '
-            f'batch_size={len(current_data["user_id"])} primary={primary_name} {diff_msg}'
-        )
-        print(msg, flush=True)
-        logging.info(msg)
-        self._pisa_loss_compare_prints += 1
 
     def _loss_vectorized(self, data, current_data, prev_data, time_idx, prev_model, forward_model, reduction):
         all_users, all_items = self.computer()
