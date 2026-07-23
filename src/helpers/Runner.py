@@ -68,6 +68,7 @@ class Runner(object):
         self.persistent_workers = args.persistent_workers
         self.prefetch_factor = args.prefetch_factor
         self.shuffle = bool(args.shuffle)
+        self.max_grad_norm = args.max_grad_norm
         self.result_file = args.result_file
         self.dyn_method = args.dyn_method
         self.time = None  # will store [start_time, last_step_time]
@@ -225,26 +226,58 @@ class Runner(object):
 
         validation_interval_epochs = utils.get_validation_interval_epochs(num_epoch)
         early_stop_patience = args.early_stop_patience
+        early_stop_min_delta = args.early_stop_min_delta
         best_recall = -np.inf
         best_epoch = 0
+        raw_loss_history = []
         logging.info(
-            'Early stopping: validation_interval_epochs=%d, patience=%d epochs (0 disables).',
+            'Early stopping: validation_interval_epochs=%d, patience=%d epochs '
+            '(0 disables), min_delta=%.1e.',
             validation_interval_epochs,
             early_stop_patience,
+            early_stop_min_delta,
+        )
+        logging.info(
+            'Loss reporting: raw=sample-weighted epoch mean, smooth=%d-epoch moving average.',
+            utils.LOSS_SMOOTHING_WINDOW,
+        )
+        logging.info(
+            'Gradient safety: max_grad_norm=%g (0 disables checking and clipping).',
+            self.max_grad_norm,
         )
 
         titer = tqdm(range(num_epoch), ncols=300)
         for epoch in titer:
             self._check_time()
-            total_loss, flag = self.fit(model, data_dict,prev_data,snap_idx, shuffle)
+            raw_loss, loss_is_finite = self.fit(
+                model, data_dict, prev_data, snap_idx, shuffle
+            )
             training_time = self._check_time()
 
-            logging.info('Epoch {:<3} total_loss={:<.4f} [{:<.1f} s]'.format(
-                            epoch + 1, total_loss, training_time))
-
-            if flag:
-                logging.info('NaN loss, stop training')
+            if not loss_is_finite:
+                logging.info(
+                    'Epoch %d encountered a non-finite loss or gradient; '
+                    'stop training. [%.1f s]',
+                    epoch + 1,
+                    training_time,
+                )
+                if best_epoch == 0:
+                    raise FloatingPointError(
+                        'Non-finite loss or gradient before the first validation '
+                        f'checkpoint at snapshot {snap_idx}'
+                    )
                 break
+
+            raw_loss_history.append(raw_loss)
+            smooth_loss = float(np.mean(
+                raw_loss_history[-utils.LOSS_SMOOTHING_WINDOW:]
+            ))
+
+            logging.info(
+                'Epoch {:<3} raw_loss={:<.4f} smooth_loss={:<.4f} [{:<.1f} s]'.format(
+                    epoch + 1, raw_loss, smooth_loss, training_time
+                )
+            )
 
             # Validation and early stopping
             completed_epochs = epoch + 1
@@ -259,7 +292,7 @@ class Runner(object):
                 args, model, val_loads, hist_loads, lite=True
             )
             current_recall = v_results[0][1]
-            if current_recall > best_recall:
+            if current_recall > best_recall + early_stop_min_delta:
                 best_epoch = completed_epochs
                 best_recall = current_recall
                 model.save_model(add_path='_snap{}'.format(snap_idx))
@@ -270,9 +303,10 @@ class Runner(object):
                     and epochs_without_improvement >= early_stop_patience
                 ):
                     logging.info(
-                        'Early stopping at epoch %d: Recall@20 did not improve for %d epochs '
-                        '(best=%.8f at epoch %d).',
+                        'Early stopping at epoch %d: Recall@20 did not improve by more than '
+                        '%.1e for %d epochs (best=%.8f at epoch %d).',
                         completed_epochs,
+                        early_stop_min_delta,
                         epochs_without_improvement,
                         best_recall,
                         best_epoch,
@@ -301,18 +335,24 @@ class Runner(object):
             prefetch_factor=self.prefetch_factor,
         )
         
-        flag = 0
+        weighted_loss_sum = 0.0
+        sample_count = 0
         for current in dl:
             #current = utils.batch_to_gpu(utils.squeeze_dict(current), model._device)
             current = utils.batch_to_gpu(current, model._device)
-            current['batch_size'] = len(current['user_id'])
-            total_loss = self.train_recommender_vanilla(dl,model, current, prev_data,snap_idx)
-            flag = np.isnan(total_loss).any()
-            if flag: 
-                break
-           
+            num_samples = len(current['user_id'])
+            batch_loss_value, loss_is_finite = self.train_recommender_vanilla(
+                dl, model, current, prev_data, snap_idx
+            )
+            if not loss_is_finite:
+                return None, False
 
-        return np.mean(total_loss).item(), flag
+            weighted_loss_sum += batch_loss_value * num_samples
+            sample_count += num_samples
+
+        if sample_count == 0:
+            raise RuntimeError('Training DataLoader produced no samples')
+        return weighted_loss_sum / sample_count, True
 
     def train_recommender_vanilla(self, data, model, current, prev_data,time_idx):
         # Train recommender
@@ -326,10 +366,28 @@ class Runner(object):
         else:
             w = None
         total_loss = model.loss(current, reduction='mean', gitf_w=w)
+        loss_value = total_loss.detach().cpu().item()
+        if not torch.isfinite(total_loss).all():
+            return loss_value, False
+
         # Update the recommender
-        model.optimizer.zero_grad()
+        model.optimizer.zero_grad(set_to_none=True)
         total_loss.backward()
+        if self.max_grad_norm > 0:
+            try:
+                torch.nn.utils.clip_grad_norm_(
+                    model.parameters(),
+                    max_norm=self.max_grad_norm,
+                    error_if_nonfinite=True,
+                )
+            except RuntimeError as error:
+                logging.warning(
+                    'Gradient norm check failed at snapshot %d: %s',
+                    time_idx,
+                    error,
+                )
+                model.optimizer.zero_grad(set_to_none=True)
+                return loss_value, False
         model.optimizer.step()
 
-
-        return total_loss.detach().cpu().numpy()
+        return loss_value, True

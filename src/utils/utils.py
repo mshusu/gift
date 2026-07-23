@@ -7,6 +7,9 @@ import random
 from scipy.sparse import csr_matrix
 
 
+LOSS_SMOOTHING_WINDOW = 5
+
+
 def read_data_from_file(filename, flag=0):
     with open(filename, "r") as f: 
         lines = f.readlines()

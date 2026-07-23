@@ -58,6 +58,7 @@ class Runner_cons(object):
         self.persistent_workers = args.persistent_workers
         self.prefetch_factor = args.prefetch_factor
         self.shuffle = bool(args.shuffle)
+        self.max_grad_norm = args.max_grad_norm
         self.result_file = args.result_file
         self.dyn_method = args.dyn_method
         self.time = None  # will store [start_time, last_step_time]
@@ -236,23 +237,57 @@ class Runner_cons(object):
 
         validation_interval_epochs = utils.get_validation_interval_epochs(num_epoch)
         early_stop_patience = args.early_stop_patience
+        early_stop_min_delta = args.early_stop_min_delta
         best_recall = -np.inf
         best_epoch = 0
+        raw_loss_history = []
+        loss_names = [
+            'total_loss', 'bpr_loss', 'kd_loss', 'kd_user', 'kd_item',
+            'kd_user_neigh', 'kd_item_neigh',
+        ]
         logging.info(
-            'Early stopping: validation_interval_epochs=%d, patience=%d epochs (0 disables).',
+            'Early stopping: validation_interval_epochs=%d, patience=%d epochs '
+            '(0 disables), min_delta=%.1e.',
             validation_interval_epochs,
             early_stop_patience,
+            early_stop_min_delta,
+        )
+        logging.info(
+            'Loss reporting: raw=sample-weighted epoch mean, smooth=%d-epoch moving average.',
+            utils.LOSS_SMOOTHING_WINDOW,
+        )
+        logging.info(
+            'Gradient safety: max_grad_norm=%g (0 disables checking and clipping).',
+            self.max_grad_norm,
         )
 
         for epoch in tqdm(range(num_epoch), ncols=100, mininterval=1):
             model.epoch = epoch
-            losses = self.fit(model, data_dict, prev_data, snap_idx, self.shuffle, prev_model)
-            # loss, bpr_loss, kd_loss, kd_loss_user, kd_loss_item, kd_loss_user_neighbor, kd_loss_item_neighbor
-            logging.info(f'Epoch {epoch} total_loss={losses[0]:.4f} bpr_loss={losses[1]:.4f} kd_loss={losses[2]:.4f} kd_user={losses[3]:.4f} kd_item={losses[4]:.4f} kd_user_neigh={losses[5]:.4f} kd_item_neigh={losses[6]:.4f}')
+            raw_losses, losses_are_finite = self.fit(
+                model, data_dict, prev_data, snap_idx, self.shuffle, prev_model
+            )
+            if not losses_are_finite:
+                logging.info(
+                    'Epoch %d encountered a non-finite loss or gradient; stop training.',
+                    epoch,
+                )
+                if best_epoch == 0:
+                    raise FloatingPointError(
+                        'Non-finite loss or gradient before the first validation '
+                        f'checkpoint at snapshot {snap_idx}'
+                    )
+                break
 
-            if not np.isfinite(losses[0]):
-                logging.info('Non-finite loss, stop training')
-                exit()
+            raw_losses = np.asarray(raw_losses, dtype=np.float64)
+            raw_loss_history.append(raw_losses)
+            smooth_losses = np.mean(
+                np.stack(raw_loss_history[-utils.LOSS_SMOOTHING_WINDOW:]), axis=0
+            )
+            loss_msg = ' '.join(
+                f'raw_{name}={raw:.4f} smooth_{name}={smooth:.4f}'
+                for name, raw, smooth in zip(loss_names, raw_losses, smooth_losses)
+            )
+            logging.info(f'Epoch {epoch} {loss_msg}')
 
             # Validation and early stopping
             completed_epochs = epoch + 1
@@ -267,7 +302,7 @@ class Runner_cons(object):
                 args, model, val_loads, hist_loads, lite=True
             )
             current_recall = v_results[0][1]
-            if current_recall > best_recall:
+            if current_recall > best_recall + early_stop_min_delta:
                 best_epoch = completed_epochs
                 best_recall = current_recall
                 model.save_model(add_path=f'_snap{snap_idx}')
@@ -278,9 +313,10 @@ class Runner_cons(object):
                     and epochs_without_improvement >= early_stop_patience
                 ):
                     logging.info(
-                        'Early stopping at epoch %d: Recall@20 did not improve for %d epochs '
-                        '(best=%.8f at epoch %d).',
+                        'Early stopping at epoch %d: Recall@20 did not improve by more than '
+                        '%.1e for %d epochs (best=%.8f at epoch %d).',
                         completed_epochs,
+                        early_stop_min_delta,
                         epochs_without_improvement,
                         best_recall,
                         best_epoch,
@@ -318,24 +354,54 @@ class Runner_cons(object):
             prefetch_factor=self.prefetch_factor,
         )
 
-        total_losses = []
+        weighted_loss_sums = None
+        sample_count = 0
         for current in dl:
             #current = utils.batch_to_gpu(utils.squeeze_dict(current), model._device)
             current = utils.batch_to_gpu(current, model._device)
-            current['batch_size'] = len(current['user_id'])
-            losses = self.train_recommender_vanilla(data, model, current, prev_data, snap_idx, prev_model)
-            total_losses.append(losses)
+            num_samples = len(current['user_id'])
+            losses, losses_are_finite = self.train_recommender_vanilla(
+                data, model, current, prev_data, snap_idx, prev_model
+            )
+            if not losses_are_finite:
+                return None, False
 
-        return [np.mean(loss).item() for loss in zip(*total_losses)]
+            batch_losses = np.asarray(losses, dtype=np.float64)
+            if weighted_loss_sums is None:
+                weighted_loss_sums = np.zeros_like(batch_losses)
+            weighted_loss_sums += batch_losses * num_samples
+            sample_count += num_samples
+
+        if sample_count == 0:
+            raise RuntimeError('Training DataLoader produced no samples')
+        return (weighted_loss_sums / sample_count).tolist(), True
 
 
     def train_recommender_vanilla(self, data, model, current, prev_data, time_idx, prev_model):
         """Process a single batch of data and update model parameters."""
         model.train()
         losses = model.loss(data, current, prev_data, time_idx, prev_model, reduction='mean')
+        loss_values = [loss.detach().cpu().item() for loss in losses]
+        if not all(torch.isfinite(loss).all() for loss in losses):
+            return loss_values, False
         
-        model.optimizer.zero_grad()
+        model.optimizer.zero_grad(set_to_none=True)
         losses[0].backward()
+        if self.max_grad_norm > 0:
+            try:
+                torch.nn.utils.clip_grad_norm_(
+                    model.parameters(),
+                    max_norm=self.max_grad_norm,
+                    error_if_nonfinite=True,
+                )
+            except RuntimeError as error:
+                logging.warning(
+                    'Gradient norm check failed at snapshot %d: %s',
+                    time_idx,
+                    error,
+                )
+                model.optimizer.zero_grad(set_to_none=True)
+                return loss_values, False
         model.optimizer.step()
 
-        return [loss.cpu().data.numpy() for loss in losses]
+        return loss_values, True
