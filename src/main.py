@@ -43,8 +43,14 @@ def parse_global_args(parser):
     parser.add_argument(
         '--early_stop_patience',
         type=int,
-        default=50,
+        default=10,
         help='Epochs allowed without validation improvement; 0 disables early stopping.',
+    )
+    parser.add_argument(
+        '--validation_interval_epochs',
+        type=int,
+        default=5,
+        help='Validate every N epochs for early stopping and best-checkpoint selection.',
     )
     parser.add_argument(
         '--early_stop_min_delta',
@@ -309,6 +315,8 @@ if __name__ == '__main__':
     args.unknown_cli_args = extras
     if args.early_stop_patience < 0:
         parser.error('--early_stop_patience must be non-negative')
+    if args.validation_interval_epochs <= 0:
+        parser.error('--validation_interval_epochs must be positive')
     if args.early_stop_min_delta < 0:
         parser.error('--early_stop_min_delta must be non-negative')
     if args.max_grad_norm < 0:

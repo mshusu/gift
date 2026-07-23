@@ -323,7 +323,7 @@ class Runner_PISA:
         if snap_idx == 0:
             num_epoch = self.epoch
 
-        validation_interval_epochs = utils.get_validation_interval_epochs(num_epoch)
+        validation_interval_epochs = args.validation_interval_epochs
         early_stop_patience = args.early_stop_patience
         early_stop_min_delta = args.early_stop_min_delta
         best_recall = -np.inf
