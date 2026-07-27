@@ -69,6 +69,11 @@ class Runner(object):
         self.prefetch_factor = args.prefetch_factor
         self.shuffle = bool(args.shuffle)
         self.max_grad_norm = args.max_grad_norm
+        self.checkpoint_retention = args.checkpoint_retention
+        pretrain_snap0 = os.path.abspath(args.pretrain_model_path + '_snap0')
+        self.protected_checkpoint_paths = (
+            () if 'pretrain' in args.dyn_method else (pretrain_snap0,)
+        )
         self.result_file = args.result_file
         self.dyn_method = args.dyn_method
         self.time = None  # will store [start_time, last_step_time]
@@ -102,6 +107,14 @@ class Runner(object):
         if self.optimizer_name.lower() != 'adam':
             raise ValueError(f"Unknown Optimizer: {self.optimizer_name}")
         return torch.optim.Adam(model.parameters(), lr=self.learning_rate, weight_decay=self.l2)
+
+    def _cleanup_previous_checkpoint(self, model, snap_idx):
+        if self.checkpoint_retention == 'all' or snap_idx <= 0:
+            return
+        utils.remove_checkpoint(
+            model.model_path + '_snap{}'.format(snap_idx - 1),
+            protected_paths=self.protected_checkpoint_paths,
+        )
 
 
 
@@ -182,6 +195,7 @@ class Runner(object):
             model.load_model(model.model_path+'_snap{}'.format(snap_idx))
             #self.write_results(model, args, corpus, snap_idx)
             self.write_results_excl_cold(model, args, snap_idx, test_loads, val_loads, hist_loads)
+            self._cleanup_previous_checkpoint(model, snap_idx)
             return 0, 0
         
         ### assuming existing models are properly trained ###
@@ -191,6 +205,7 @@ class Runner(object):
             #self.write_results(model, args, corpus, snap_idx)
             self.write_results_excl_cold(model, args, snap_idx, test_loads, val_loads, hist_loads)
             #self.write_results_for_different_user_group(model, args, corpus, snap_idx)
+            self._cleanup_previous_checkpoint(model, snap_idx)
 
             return 0, 0
         
@@ -317,6 +332,7 @@ class Runner(object):
         model.load_model(model.model_path+'_snap{}'.format(snap_idx))
         #self.write_results(model, args, corpus, snap_idx)
         self.write_results_excl_cold(model, args, snap_idx, test_loads, val_loads, hist_loads)
+        self._cleanup_previous_checkpoint(model, snap_idx)
 
         return self.time[1] - self.time[0], best_epoch
 

@@ -48,6 +48,11 @@ class Runner_PISA:
         self.prefetch_factor = args.prefetch_factor
         self.shuffle = bool(args.shuffle)
         self.max_grad_norm = args.max_grad_norm
+        self.checkpoint_retention = args.checkpoint_retention
+        pretrain_snap0 = os.path.abspath(args.pretrain_model_path + '_snap0')
+        self.protected_checkpoint_paths = (
+            () if 'pretrain' in args.dyn_method else (pretrain_snap0,)
+        )
         self.result_file = args.result_file
         self.dyn_method = args.dyn_method
         self.test_result_file = args.test_result_file
@@ -206,6 +211,20 @@ class Runner_PISA:
         if self.optimizer_name.lower() == 'adam':
             return torch.optim.Adam(model.parameters(), lr=self.learning_rate, weight_decay=self.l2)
         raise ValueError(f"Unknown Optimizer: {self.optimizer_name}")
+
+    def _cleanup_completed_snapshot(self, model, snap_idx, remove_forward):
+        if self.checkpoint_retention == 'all':
+            return
+        if remove_forward:
+            utils.remove_checkpoint(
+                f'{model.model_path}_forward_snap{snap_idx}',
+                protected_paths=self.protected_checkpoint_paths,
+            )
+        if snap_idx > 0:
+            utils.remove_checkpoint(
+                f'{model.model_path}_snap{snap_idx - 1}',
+                protected_paths=self.protected_checkpoint_paths,
+            )
     
     def write_results_excl_cold(self, model, args, snap_idx, test_loads, val_loads, hist_loads, option=''):
         """Write validation and test results to files and save metrics in JSON format."""
@@ -276,10 +295,16 @@ class Runner_PISA:
         # Check if model exists and handle accordingly
         model_path = f'{model.model_path}_snap{snap_idx}'
         if os.path.exists(model_path) and not force_train:
-            if not (step_flag == 0 and 'plasticity' in self.dyn_method):
+            is_forward_step = step_flag == 0 and 'plasticity' in self.dyn_method
+            if not is_forward_step:
                 model.load_model(model_path)
                 #self.write_results(model, args, corpus, snap_idx)
                 self.write_results_excl_cold(model, args, snap_idx, test_loads, val_loads, hist_loads)
+                self._cleanup_completed_snapshot(
+                    model,
+                    snap_idx,
+                    remove_forward='plasticity' in self.dyn_method,
+                )
                 print(f'model already exists, skip training')
             return 0, 0
         else:
@@ -303,6 +328,7 @@ class Runner_PISA:
             model.save_model(add_path='_snap0')
             #self.write_results(model, args, corpus, snap_idx, option='')
             self.write_results_excl_cold(model, args, snap_idx, test_loads, val_loads, hist_loads, option='')
+            self._cleanup_completed_snapshot(model, snap_idx, remove_forward=True)
             return 0
         if snap_idx > 0 and 'finetune' in args.dyn_method:
             model.load_model(f'{model.model_path}_snap{snap_idx-1}')
@@ -414,8 +440,15 @@ class Runner_PISA:
             if improved:
                 best_epoch = completed_epochs
                 best_recall = current_recall
-                save_path = f'_forward_snap{snap_idx}' if (step_flag == 0 and 'plasticity' in self.dyn_method) else f'_snap{snap_idx}'
-                model.save_model(add_path=save_path)
+                is_forward_step = step_flag == 0 and 'plasticity' in self.dyn_method
+                save_path = f'_forward_snap{snap_idx}' if is_forward_step else f'_snap{snap_idx}'
+                model.save_model(
+                    add_path=save_path,
+                    include_optimizer=(
+                        is_forward_step
+                        and args.pisa_aux_optimizer_mode == 'load_forward'
+                    ),
+                )
             else:
                 epochs_without_improvement = completed_epochs - best_epoch
                 should_stop = (
@@ -451,6 +484,13 @@ class Runner_PISA:
         model.load_model(model_path)
         #self.write_results(model, args, corpus, snap_idx, option='forward' if step_flag == 0 and 'plasticity' in self.dyn_method else '')
         self.write_results_excl_cold(model, args, snap_idx, test_loads, val_loads, hist_loads, option='forward' if step_flag == 0 and 'plasticity' in self.dyn_method else '')
+        is_forward_step = step_flag == 0 and 'plasticity' in self.dyn_method
+        if not is_forward_step:
+            self._cleanup_completed_snapshot(
+                model,
+                snap_idx,
+                remove_forward='plasticity' in self.dyn_method,
+            )
 
         return best_epoch
 

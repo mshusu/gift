@@ -85,6 +85,16 @@ def parse_global_args(parser):
                         help='Shuffle training DataLoader batches.')
     parser.add_argument('--vectorized_eval', type=int, default=1,
                         help='Use vectorized Test_excl_cold implementation.')
+    parser.add_argument(
+        '--checkpoint_retention',
+        type=str,
+        default='latest',
+        choices=['all', 'latest'],
+        help=(
+            'Checkpoint retention policy: keep all snapshots or only the latest '
+            'completed snapshot.'
+        ),
+    )
     
     return parser
 
@@ -384,6 +394,10 @@ if __name__ == '__main__':
         msg = 'Vectorized eval enabled.'
         print(msg, flush=True)
         logging.info(msg)
+    logging.info(
+        'Checkpoint retention: %s; final checkpoints store model state only.',
+        args.checkpoint_retention,
+    )
     logging.info(log_file_name1+'__'+log_file_name2)
     
     main()
@@ -400,6 +414,3 @@ if __name__ == '__main__':
                     print(f' Gift ' + filename.replace('_test_', ''))
                     cmdc = f"cat {args.test_result_file}/{filename}"
                     os.system(cmdc)
-        model_dir = args.test_result_file.replace("test_result", "model")
-        if os.path.exists(model_dir):
-            shutil.rmtree(model_dir)

@@ -462,15 +462,18 @@ class Model(torch.nn.Module):
 
         
 
-    def save_model(self, model_path=None, add_path=None):
+    def save_model(self, model_path=None, add_path=None, include_optimizer=False):
         if model_path is None:
             model_path = self.model_path
         if add_path:
             model_path += add_path
         utils.check_dir(model_path)
-        torch.save({'model_state_dict': self.state_dict(),
-                    'optimizer_state_dict': self.optimizer.state_dict()},
-                    model_path)
+        checkpoint = {'model_state_dict': self.state_dict()}
+        if include_optimizer:
+            if self.optimizer is None:
+                raise RuntimeError('Cannot save optimizer state before optimizer initialization')
+            checkpoint['optimizer_state_dict'] = self.optimizer.state_dict()
+        torch.save(checkpoint, model_path)
 
     def load_model(self, model_path=None, add_path=None, flag=0):
         if model_path is None:

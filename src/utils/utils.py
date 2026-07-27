@@ -2,12 +2,26 @@
 import os
 import torch
 import datetime
+import logging
 import numpy as np
 import random
 from scipy.sparse import csr_matrix
 
 
 LOSS_SMOOTHING_WINDOW = 5
+
+
+def remove_checkpoint(path, protected_paths=()):
+    path = os.path.abspath(path)
+    protected_paths = {os.path.abspath(p) for p in protected_paths}
+    if path in protected_paths:
+        logging.info('Keep protected checkpoint: %s', path)
+        return False
+    if not os.path.isfile(path):
+        return False
+    os.remove(path)
+    logging.info('Removed checkpoint: %s', path)
+    return True
 
 
 def read_data_from_file(filename, flag=0):
