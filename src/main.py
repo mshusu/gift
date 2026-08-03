@@ -21,7 +21,10 @@ def parse_global_args(parser):
     parser.add_argument('--gpu', type=str, default='0',
                         help='Set CUDA_VISIBLE_DEVICES')
     parser.add_argument('--verbose', type=int, default=logging.INFO,
-                        help='Logging Level, 0, 10, ..., 50')
+                        help=(
+                            'Console logging level: 10 shows epoch details, '
+                            '20 shows snapshot summaries, and 30 shows warnings only.'
+                        ))
     parser.add_argument('--log_file', type=str, default='',
                         help='Logging file path')
     parser.add_argument('--result_file', type=str, default='',
@@ -320,8 +323,6 @@ if __name__ == '__main__':
     parser.add_argument('--only_data_preprocess', type=int, default=0, help='only dataset pre process, no train/val/test')
     #parser = tester_name.parse_tester_args(parser)
     args, extras = parser.parse_known_args()
-    if extras:
-        print(f'Warning: ignored unknown CLI args: {extras}', flush=True)
     args.unknown_cli_args = extras
     if args.early_stop_patience < 0:
         parser.error('--early_stop_patience must be non-negative')
@@ -386,14 +387,11 @@ if __name__ == '__main__':
     args.dyn_method = init_args.dyn_method
     args.model_name = init_args.model_name
     
-    logging.basicConfig(filename=args.log_file, level=args.verbose)
-    logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
+    utils.configure_logging(args.log_file, args.verbose)
     if args.unknown_cli_args:
         logging.warning('Ignored unknown CLI args: {}'.format(args.unknown_cli_args))
     if args.vectorized_eval:
-        msg = 'Vectorized eval enabled.'
-        print(msg, flush=True)
-        logging.info(msg)
+        logging.info('Vectorized eval enabled.')
     logging.info(
         'Checkpoint retention: %s; final checkpoints store model state only.',
         args.checkpoint_retention,

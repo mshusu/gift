@@ -48,6 +48,7 @@ class Runner_PISA:
         self.prefetch_factor = args.prefetch_factor
         self.shuffle = bool(args.shuffle)
         self.max_grad_norm = args.max_grad_norm
+        self.show_epoch_progress = utils.should_show_epoch_progress(args.verbose)
         self.checkpoint_retention = args.checkpoint_retention
         pretrain_snap0 = os.path.abspath(args.pretrain_model_path + '_snap0')
         self.protected_checkpoint_paths = (
@@ -66,7 +67,6 @@ class Runner_PISA:
 
     def _debug_parity(self, msg):
         if self.pisa_debug_parity:
-            print(msg, flush=True)
             logging.info(msg)
 
     def _load_checkpoint(self, model_path, device):
@@ -233,7 +233,6 @@ class Runner_PISA:
             f'Eval flags: vectorized_eval={vectorized_flag}, '
             f'snap_idx={snap_idx}, option={option}'
         )
-        print(eval_msg, flush=True)
         logging.info(eval_msg)
         val_results = Inference.Test_excl_cold_selected(args, model, val_loads, hist_loads)
         test_results = Inference.Test_excl_cold_selected(args, model, test_loads, hist_loads)
@@ -305,10 +304,13 @@ class Runner_PISA:
                     snap_idx,
                     remove_forward='plasticity' in self.dyn_method,
                 )
-                print(f'model already exists, skip training')
+                logging.info('Model already exists; skip training.')
             return 0, 0
         else:
-            print(f'model does not exist, training from scratch for time stage {snap_idx}')
+            logging.info(
+                'Model does not exist; train time stage %d from scratch.',
+                snap_idx,
+            )
 
         # Handle pretraining case
         # if snap_idx > 0 and 'pretrain' in args.dyn_method:
@@ -360,18 +362,18 @@ class Runner_PISA:
             'plast_neigh_loss', 'stab_neigh_loss',
         ]
         model.forward_flag = step_flag
-        logging.info(
+        logging.debug(
             'Early stopping: validation_interval_epochs=%d, patience=%d epochs '
             '(0 disables), min_delta=%.1e.',
             validation_interval_epochs,
             early_stop_patience,
             early_stop_min_delta,
         )
-        logging.info(
+        logging.debug(
             'Loss reporting: raw=sample-weighted epoch mean, smooth=%d-epoch moving average.',
             utils.LOSS_SMOOTHING_WINDOW,
         )
-        logging.info(
+        logging.debug(
             'Gradient safety: max_grad_norm=%g (0 disables checking and clipping).',
             self.max_grad_norm,
         )
@@ -392,14 +394,24 @@ class Runner_PISA:
             f'shuffle={int(self.shuffle)}'
         )
 
-        for epoch in tqdm(range(num_epoch), ncols=100, mininterval=1):
+        is_forward_step = step_flag == 0 and 'plasticity' in self.dyn_method
+        pass_name = 'forward' if is_forward_step else 'auxiliary' if step_flag > 0 else 'training'
+        epochs_completed = 0
+        last_raw_losses = np.full(len(loss_names), np.nan, dtype=np.float64)
+        last_smooth_losses = last_raw_losses.copy()
+        for epoch in tqdm(
+            range(num_epoch),
+            disable=not self.show_epoch_progress,
+            leave=False,
+            dynamic_ncols=True,
+        ):
             model.epoch = epoch
             raw_losses, losses_are_finite = self.fit(
                 model, data_dict, prev_data, snap_idx, self.shuffle,
                 prev_model, forward_model,
             )
             if not losses_are_finite:
-                logging.info(
+                logging.error(
                     'Epoch %d encountered a non-finite loss or gradient; stop training.',
                     epoch,
                 )
@@ -415,11 +427,14 @@ class Runner_PISA:
             smooth_losses = np.mean(
                 np.stack(raw_loss_history[-utils.LOSS_SMOOTHING_WINDOW:]), axis=0
             )
+            epochs_completed = epoch + 1
+            last_raw_losses = raw_losses
+            last_smooth_losses = smooth_losses
             loss_msg = ' '.join(
                 f'raw_{name}={raw:.4f} smooth_{name}={smooth:.4f}'
                 for name, raw, smooth in zip(loss_names, raw_losses, smooth_losses)
             )
-            logging.info(f'Epoch {epoch} {loss_msg}')
+            logging.debug(f'Epoch {epoch} {loss_msg}')
             self._debug_state_checksum(model, snap_idx, step_flag, f'after_epoch_{epoch}')
 
             # Validation and early stopping
@@ -440,7 +455,6 @@ class Runner_PISA:
             if improved:
                 best_epoch = completed_epochs
                 best_recall = current_recall
-                is_forward_step = step_flag == 0 and 'plasticity' in self.dyn_method
                 save_path = f'_forward_snap{snap_idx}' if is_forward_step else f'_snap{snap_idx}'
                 model.save_model(
                     add_path=save_path,
@@ -473,7 +487,17 @@ class Runner_PISA:
                 )
                 break
 
-        logging.info(f"Training complete. Best validation epoch: {best_epoch:03d}")
+        logging.info(
+            'Snapshot %d %s pass complete: epochs=%d best_epoch=%03d '
+            'best_recall@20=%.8f raw_total_loss=%.4f smooth_total_loss=%.4f',
+            snap_idx,
+            pass_name,
+            epochs_completed,
+            best_epoch,
+            best_recall,
+            last_raw_losses[0],
+            last_smooth_losses[0],
+        )
         self._debug_parity(
             f'[PISAParity] complete snap_idx={snap_idx} step_flag={step_flag} '
             f'best_epoch={best_epoch} best_recall@20={best_recall:.8f}'
@@ -484,7 +508,6 @@ class Runner_PISA:
         model.load_model(model_path)
         #self.write_results(model, args, corpus, snap_idx, option='forward' if step_flag == 0 and 'plasticity' in self.dyn_method else '')
         self.write_results_excl_cold(model, args, snap_idx, test_loads, val_loads, hist_loads, option='forward' if step_flag == 0 and 'plasticity' in self.dyn_method else '')
-        is_forward_step = step_flag == 0 and 'plasticity' in self.dyn_method
         if not is_forward_step:
             self._cleanup_completed_snapshot(
                 model,

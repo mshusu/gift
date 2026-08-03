@@ -59,6 +59,7 @@ class Runner_cons(object):
         self.prefetch_factor = args.prefetch_factor
         self.shuffle = bool(args.shuffle)
         self.max_grad_norm = args.max_grad_norm
+        self.show_epoch_progress = utils.should_show_epoch_progress(args.verbose)
         self.checkpoint_retention = args.checkpoint_retention
         pretrain_snap0 = os.path.abspath(args.pretrain_model_path + '_snap0')
         self.protected_checkpoint_paths = (
@@ -120,7 +121,6 @@ class Runner_cons(object):
             f'Eval flags: vectorized_eval={vectorized_flag}, '
             f'snap_idx={snap_idx}, option={option}'
         )
-        print(eval_msg, flush=True)
         logging.info(eval_msg)
         val_results = Inference.Test_excl_cold_selected(args, model, val_loads, hist_loads)
         test_results = Inference.Test_excl_cold_selected(args, model, test_loads, hist_loads)
@@ -258,29 +258,37 @@ class Runner_cons(object):
             'total_loss', 'bpr_loss', 'kd_loss', 'kd_user', 'kd_item',
             'kd_user_neigh', 'kd_item_neigh',
         ]
-        logging.info(
+        logging.debug(
             'Early stopping: validation_interval_epochs=%d, patience=%d epochs '
             '(0 disables), min_delta=%.1e.',
             validation_interval_epochs,
             early_stop_patience,
             early_stop_min_delta,
         )
-        logging.info(
+        logging.debug(
             'Loss reporting: raw=sample-weighted epoch mean, smooth=%d-epoch moving average.',
             utils.LOSS_SMOOTHING_WINDOW,
         )
-        logging.info(
+        logging.debug(
             'Gradient safety: max_grad_norm=%g (0 disables checking and clipping).',
             self.max_grad_norm,
         )
 
-        for epoch in tqdm(range(num_epoch), ncols=100, mininterval=1):
+        epochs_completed = 0
+        last_raw_losses = np.full(len(loss_names), np.nan, dtype=np.float64)
+        last_smooth_losses = last_raw_losses.copy()
+        for epoch in tqdm(
+            range(num_epoch),
+            disable=not self.show_epoch_progress,
+            leave=False,
+            dynamic_ncols=True,
+        ):
             model.epoch = epoch
             raw_losses, losses_are_finite = self.fit(
                 model, data_dict, prev_data, snap_idx, self.shuffle, prev_model
             )
             if not losses_are_finite:
-                logging.info(
+                logging.error(
                     'Epoch %d encountered a non-finite loss or gradient; stop training.',
                     epoch,
                 )
@@ -296,11 +304,14 @@ class Runner_cons(object):
             smooth_losses = np.mean(
                 np.stack(raw_loss_history[-utils.LOSS_SMOOTHING_WINDOW:]), axis=0
             )
+            epochs_completed = epoch + 1
+            last_raw_losses = raw_losses
+            last_smooth_losses = smooth_losses
             loss_msg = ' '.join(
                 f'raw_{name}={raw:.4f} smooth_{name}={smooth:.4f}'
                 for name, raw, smooth in zip(loss_names, raw_losses, smooth_losses)
             )
-            logging.info(f'Epoch {epoch} {loss_msg}')
+            logging.debug(f'Epoch {epoch} {loss_msg}')
 
             # Validation and early stopping
             completed_epochs = epoch + 1
@@ -336,7 +347,16 @@ class Runner_cons(object):
                     )
                     break
 
-        logging.info(f"Training complete. Best validation epoch: {best_epoch:03d}")
+        logging.info(
+            'Snapshot %d training complete: epochs=%d best_epoch=%03d '
+            'best_recall@20=%.8f raw_total_loss=%.4f smooth_total_loss=%.4f',
+            snap_idx,
+            epochs_completed,
+            best_epoch,
+            best_recall,
+            last_raw_losses[0],
+            last_smooth_losses[0],
+        )
         
         # Load best model and write results
         model_path = f'{model.model_path}_snap{snap_idx}'

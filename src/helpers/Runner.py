@@ -69,6 +69,7 @@ class Runner(object):
         self.prefetch_factor = args.prefetch_factor
         self.shuffle = bool(args.shuffle)
         self.max_grad_norm = args.max_grad_norm
+        self.show_epoch_progress = utils.should_show_epoch_progress(args.verbose)
         self.checkpoint_retention = args.checkpoint_retention
         pretrain_snap0 = os.path.abspath(args.pretrain_model_path + '_snap0')
         self.protected_checkpoint_paths = (
@@ -125,7 +126,6 @@ class Runner(object):
             f'Eval flags: vectorized_eval={vectorized_flag}, '
             f'snap_idx={snap_idx}, option={option}'
         )
-        print(eval_msg, flush=True)
         logging.info(eval_msg)
         val_results = Inference.Test_excl_cold_selected(args, model, val_loads, hist_loads)
         test_results = Inference.Test_excl_cold_selected(args, model, test_loads, hist_loads)
@@ -228,7 +228,7 @@ class Runner(object):
 
         self._check_time(start=True)
         self.time_d = {}
-        logging.info('dyn_method: {}'.format(self.dyn_method))
+        logging.debug('dyn_method: {}'.format(self.dyn_method))
         if 'finetune' in self.dyn_method or 'newtrain' in self.dyn_method:
             num_epoch = self.tepoch
             shuffle = self.shuffle
@@ -245,23 +245,31 @@ class Runner(object):
         best_recall = -np.inf
         best_epoch = 0
         raw_loss_history = []
-        logging.info(
+        logging.debug(
             'Early stopping: validation_interval_epochs=%d, patience=%d epochs '
             '(0 disables), min_delta=%.1e.',
             validation_interval_epochs,
             early_stop_patience,
             early_stop_min_delta,
         )
-        logging.info(
+        logging.debug(
             'Loss reporting: raw=sample-weighted epoch mean, smooth=%d-epoch moving average.',
             utils.LOSS_SMOOTHING_WINDOW,
         )
-        logging.info(
+        logging.debug(
             'Gradient safety: max_grad_norm=%g (0 disables checking and clipping).',
             self.max_grad_norm,
         )
 
-        titer = tqdm(range(num_epoch), ncols=300)
+        epochs_completed = 0
+        last_raw_loss = np.nan
+        last_smooth_loss = np.nan
+        titer = tqdm(
+            range(num_epoch),
+            disable=not self.show_epoch_progress,
+            leave=False,
+            dynamic_ncols=True,
+        )
         for epoch in titer:
             self._check_time()
             raw_loss, loss_is_finite = self.fit(
@@ -270,7 +278,7 @@ class Runner(object):
             training_time = self._check_time()
 
             if not loss_is_finite:
-                logging.info(
+                logging.error(
                     'Epoch %d encountered a non-finite loss or gradient; '
                     'stop training. [%.1f s]',
                     epoch + 1,
@@ -287,8 +295,11 @@ class Runner(object):
             smooth_loss = float(np.mean(
                 raw_loss_history[-utils.LOSS_SMOOTHING_WINDOW:]
             ))
+            epochs_completed = epoch + 1
+            last_raw_loss = raw_loss
+            last_smooth_loss = smooth_loss
 
-            logging.info(
+            logging.debug(
                 'Epoch {:<3} raw_loss={:<.4f} smooth_loss={:<.4f} [{:<.1f} s]'.format(
                     epoch + 1, raw_loss, smooth_loss, training_time
                 )
@@ -328,7 +339,16 @@ class Runner(object):
                     )
                     break
         
-        logging.info("End train and valid. Best validation epoch is {:03d}.".format(best_epoch))
+        logging.info(
+            'Snapshot %d training complete: epochs=%d best_epoch=%03d '
+            'best_recall@20=%.8f raw_loss=%.4f smooth_loss=%.4f',
+            snap_idx,
+            epochs_completed,
+            best_epoch,
+            best_recall,
+            last_raw_loss,
+            last_smooth_loss,
+        )
         model.load_model(model.model_path+'_snap{}'.format(snap_idx))
         #self.write_results(model, args, corpus, snap_idx)
         self.write_results_excl_cold(model, args, snap_idx, test_loads, val_loads, hist_loads)

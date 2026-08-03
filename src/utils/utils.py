@@ -1,5 +1,6 @@
 # -*- coding: UTF-8 -*-
 import os
+import sys
 import torch
 import datetime
 import logging
@@ -9,6 +10,21 @@ from scipy.sparse import csr_matrix
 
 
 LOSS_SMOOTHING_WINDOW = 5
+
+
+def configure_logging(log_file, console_level):
+    logging.basicConfig(
+        filename=log_file,
+        level=logging.DEBUG,
+        force=True,
+    )
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(console_level)
+    logging.getLogger().addHandler(console_handler)
+
+
+def should_show_epoch_progress(console_level):
+    return console_level <= logging.DEBUG and sys.stderr.isatty()
 
 
 def remove_checkpoint(path, protected_paths=()):
