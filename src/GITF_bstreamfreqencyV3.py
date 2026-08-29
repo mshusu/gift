@@ -24,6 +24,7 @@ class bStreamFrequencyV3:
             'item_list_partialEntropyEMA',
             'item_list_partialEntropyGlobal',
             'item_both_info',
+            'item_both_partialEntropy',
         }
         if proc_stream_mode not in valid_modes:
             raise ValueError(
@@ -43,7 +44,10 @@ class bStreamFrequencyV3:
             self.global_t = 0
             self.total_occurrence = 0
             self.proc_stream_mode = proc_stream_mode
-            if proc_stream_mode == 'item_both_info':
+            if proc_stream_mode in {
+                'item_both_info',
+                'item_both_partialEntropy',
+            }:
                 self.step_gap_itemset = torch.zeros(doc_count, device=self.device)
                 self.step_latest_itemset = torch.zeros(doc_count, device=self.device)
                 self.step_gap_itemlist_ema = torch.zeros(doc_count, device=self.device)
@@ -54,7 +58,10 @@ class bStreamFrequencyV3:
         if self.proc_stream_mode == 'item_set_info':
             return self.proc_newStream_byItemset(data_dict.item_set)
 
-        if self.proc_stream_mode == 'item_both_info':
+        if self.proc_stream_mode in {
+            'item_both_info',
+            'item_both_partialEntropy',
+        }:
             self.proc_newStream_byItemset(
                 data_dict.item_set,
                 step_gap=self.step_gap_itemset,
@@ -172,6 +179,9 @@ class bStreamFrequencyV3:
                 )
             )
 
+        if self.proc_stream_mode == 'item_both_partialEntropy':
+            return self._get_partialEntropy_byItemset_andItemlist_infoEMA(idxes)
+
         if self.proc_stream_mode == 'item_list_infoEMA':
             return self._get_shannonInfo_byItemlist_infoEMA(idxes)
 
@@ -187,10 +197,8 @@ class bStreamFrequencyV3:
         raise ValueError(f'Unsupported proc_stream_mode: {self.proc_stream_mode}')
 
     def _get_shannonInfo_byItemset(self, idxes, step_gap=None):
-        # Handle step_gap 0 for first occurrences by assigning weight 1.
-        step_gap = self.step_gap if step_gap is None else step_gap
-        iw = torch.where(step_gap[idxes] == 0, self.const_e, step_gap[idxes])
-        return torch.log(self._apply_step_bounds(iw))
+        information, _ = self._get_itemset_info_and_probability(idxes, step_gap)
+        return information
 
     def _get_shannonInfo_byItemlist_infoEMA(self, idxes, step_gap=None):
         probabilities = self._get_probabilities_byItemlist_EMA(idxes, step_gap)
@@ -209,6 +217,28 @@ class bStreamFrequencyV3:
         probabilities = counts / total
         information = torch.log2(total) - torch.log2(counts)
         return probabilities * information
+
+    def _get_partialEntropy_byItemset_andItemlist_infoEMA(self, idxes):
+        itemset_info, itemset_probability = self._get_itemset_info_and_probability(
+            idxes,
+            self.step_gap_itemset,
+        )
+        ema_probability = self._get_probabilities_byItemlist_EMA(
+            idxes,
+            self.step_gap_itemlist_ema,
+        )
+        ema_info = self.getInfo(ema_probability)
+        return (
+            itemset_probability * itemset_info
+            + ema_probability * ema_info
+        )
+
+    def _get_itemset_info_and_probability(self, idxes, step_gap=None):
+        # Handle step_gap 0 for first occurrences by assigning weight 1.
+        step_gap = self.step_gap if step_gap is None else step_gap
+        iw = torch.where(step_gap[idxes] == 0, self.const_e, step_gap[idxes])
+        iw = self._apply_step_bounds(iw)
+        return torch.log(iw), 1.0 / iw
 
     def _get_probabilities_byItemlist_EMA(self, idxes, step_gap=None):
         step_gap = self.step_gap if step_gap is None else step_gap

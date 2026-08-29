@@ -34,6 +34,7 @@ def parse_global_args(parser):
             'item_list_partialEntropyEMA',
             'item_list_partialEntropyGlobal',
             'item_both_info',
+            'item_both_partialEntropy',
         ],
         default='item_list_infoEMA',
         help='Input mode for proc new stream block',
