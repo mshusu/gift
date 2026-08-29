@@ -399,7 +399,7 @@ class Runner(object):
         #self, data, prev_data, snap_idx,reduction
         if self.stream_frequency:
             pos_items = current['item_id'][:,:1].squeeze(-1)
-            w = self.stream_frequency.get_shannonInfoConent(pos_items)
+            w = self.stream_frequency.get_streamWeight(pos_items)
         else:
             w = None
         total_loss = model.loss(current, reduction='mean', gitf_w=w)

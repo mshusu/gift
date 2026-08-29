@@ -15,12 +15,20 @@ V3: give everyone 0 initilly
 class bStreamFrequencyV3:
     def __init__(
                     self, doc_count, alpha, steplowerbound, stepupperbound,
-                    proc_stream_mode='item_list',
+                    proc_stream_mode='item_list_infoEMA',
                 ):
-        if proc_stream_mode not in {'item_set', 'item_list'}:
+        valid_modes = {
+            'item_set_info',
+            'item_list_infoEMA',
+            'item_list_infoGlobal',
+            'item_list_partialEntropyEMA',
+            'item_list_partialEntropyGlobal',
+            'item_both_info',
+        }
+        if proc_stream_mode not in valid_modes:
             raise ValueError(
                 f"Unknown proc_stream_mode: {proc_stream_mode}. "
-                "Expected 'item_set' or 'item_list'."
+                f'Expected one of {sorted(valid_modes)}.'
             )
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         with torch.no_grad():
@@ -33,21 +41,67 @@ class bStreamFrequencyV3:
             self.stepupperbound = stepupperbound
             self.const_e = torch.exp(torch.tensor(1.0, device=self.device)) # 2.71828...
             self.global_t = 0
+            self.total_occurrence = 0
             self.proc_stream_mode = proc_stream_mode
+            if proc_stream_mode == 'item_both_info':
+                self.step_gap_itemset = torch.zeros(doc_count, device=self.device)
+                self.step_latest_itemset = torch.zeros(doc_count, device=self.device)
+                self.step_gap_itemlist_ema = torch.zeros(doc_count, device=self.device)
+                self.step_latest_itemlist_ema = torch.zeros(doc_count, device=self.device)
             #self.resetflagAcrEpoch = resetflag
     
     def proc_newStream(self, data_dict):
-        if self.proc_stream_mode == 'item_set':
-            self.proc_newStream_byItemset(data_dict.item_set)
-        else:
-            self.proc_newStream_byItemlist(data_dict.trainItem)
+        if self.proc_stream_mode == 'item_set_info':
+            return self.proc_newStream_byItemset(data_dict.item_set)
 
-    def proc_newStream_byItemset(self, item_set):
-        self.global_t += 1
+        if self.proc_stream_mode == 'item_both_info':
+            self.proc_newStream_byItemset(
+                data_dict.item_set,
+                step_gap=self.step_gap_itemset,
+                step_latest=self.step_latest_itemset,
+            )
+            return self.proc_newStream_byItemlist_infoEMA(
+                data_dict.trainItem,
+                step_gap=self.step_gap_itemlist_ema,
+                step_latest=self.step_latest_itemlist_ema,
+                increment_time=False,
+            )
+
+        if self.proc_stream_mode in {
+            'item_list_infoEMA',
+            'item_list_partialEntropyEMA',
+        }:
+            return self.proc_newStream_byItemlist_infoEMA(data_dict.trainItem)
+
+        if self.proc_stream_mode in {
+            'item_list_infoGlobal',
+            'item_list_partialEntropyGlobal',
+        }:
+            return self.proc_newStream_byItemlist_infoGlobal(data_dict.trainItem)
+
+        raise ValueError(f'Unsupported proc_stream_mode: {self.proc_stream_mode}')
+
+    def proc_newStream_byItemset(
+        self,
+        item_set,
+        step_gap=None,
+        step_latest=None,
+        increment_time=True,
+    ):
+        if increment_time:
+            self.global_t += 1
+        step_gap = self.step_gap if step_gap is None else step_gap
+        step_latest = self.step_latest if step_latest is None else step_latest
         ids = torch.as_tensor(list(item_set), dtype=torch.long, device=self.device)
-        self._update_step_state(ids, self.global_t)
+        self._update_step_state(ids, self.global_t, step_gap, step_latest)
 
-    def proc_newStream_byItemlist(self, item_list):
+    def proc_newStream_byItemlist_infoEMA(
+        self,
+        item_list,
+        step_gap=None,
+        step_latest=None,
+        increment_time=True,
+    ):
         if len(item_list) == 0:
             raise ValueError('Cannot process an empty stream item list')
         ids_np, counts_np = np.unique(item_list, return_counts=True)
@@ -56,51 +110,149 @@ class bStreamFrequencyV3:
         ids = torch.from_numpy(ids_np).long().to(self.device)
         probs = torch.from_numpy(probs_np).float().to(self.device)
 
+        if increment_time:
+            self.global_t += 1
+        step_gap = self.step_gap if step_gap is None else step_gap
+        step_latest = self.step_latest if step_latest is None else step_latest
+        self._update_step_state_with_probs(
+            ids,
+            probs,
+            self.global_t,
+            step_gap,
+            step_latest,
+        )
+
+    def proc_newStream_byItemlist_infoGlobal(self, item_list):
+        if len(item_list) == 0:
+            raise ValueError('Cannot process an empty stream item list')
+        ids_np, counts_np = np.unique(item_list, return_counts=True)
+        ids = torch.from_numpy(ids_np).long().to(self.device)
+        counts = torch.from_numpy(counts_np).to(
+            device=self.device,
+            dtype=self.step_gap.dtype,
+        )
+
         self.global_t += 1
-        self._update_step_state_with_probs(ids, probs, self.global_t)
+        self.total_occurrence += len(item_list)
+        self._update_step_state_with_counts(ids, counts)
     
     # ids: tensor of deduped id list
-    def _update_step_state(self, ids, t):
+    def _update_step_state(self, ids, t, step_gap, step_latest):
         # count 1st in
         # self.step_gap[ids] = (1 - self.alpha) * self.step_gap[ids] + torch.where(self.step_latest[ids] == 0, 1, self.alpha) * (t - self.step_latest[ids])
         # ignore 1st
-        self.step_gap[ids] = (1 - self.alpha) * self.step_gap[ids] + torch.where(self.step_latest[ids] == 0, 0, torch.where(self.step_gap[ids] == 0, 1, self.alpha) ) * (t - self.step_latest[ids])
+        step_gap[ids] = (1 - self.alpha) * step_gap[ids] + torch.where(step_latest[ids] == 0, 0, torch.where(step_gap[ids] == 0, 1, self.alpha) ) * (t - step_latest[ids])
         # self.step_gap[ids] = (1 - self.alpha) * self.step_gap[ids] + self.alpha * (t - self.step_latest[ids])
-        self.step_latest[ids] = t
+        step_latest[ids] = t
         #self.step_latest_flag[ids] = True
 
-    def _update_step_state_with_probs(self, ids, probs, t):
-        self.step_gap[ids] = (
-            (1 - self.alpha) ** (t - self.step_latest[ids]) * self.step_gap[ids]
-            + torch.where(self.step_gap[ids] == 0, 1, self.alpha) * probs
+    def _update_step_state_with_probs(self, ids, probs, t, step_gap, step_latest):
+        step_gap[ids] = (
+            (1 - self.alpha) ** (t - step_latest[ids]) * step_gap[ids]
+            + torch.where(step_gap[ids] == 0, 1, self.alpha) * probs
         )
-        self.step_latest[ids] = t
-    
-    # def get_probability(self, idxes):
-    #    return 1.0 / torch.where(self.step_gap[idxes] == 0, 1, self.step_gap[idxes])
-    
-    def get_shannonInfoConent(self, idxes):
-        if self.proc_stream_mode == 'item_list':
-            if (self.step_gap[idxes] == 0).any():
-                raise ValueError("'step_gap' has value 0")
-            return self.getInfo(self.step_gap[idxes])
+        step_latest[ids] = t
 
-        # handle step_gap 0 when item 1st occurence: assign the sample initilized training weight 1 
-        iw = torch.where(self.step_gap[idxes] == 0, self.const_e, self.step_gap[idxes])
-        # bunded step value
+    def _update_step_state_with_counts(self, ids, counts):
+        self.step_gap[ids] += counts
+    
+    def get_streamWeight(self, idxes):
+        if self.proc_stream_mode == 'item_set_info':
+            return self._get_shannonInfo_byItemset(idxes)
+
+        if self.proc_stream_mode == 'item_both_info':
+            return (
+                self._get_shannonInfo_byItemset(
+                    idxes,
+                    step_gap=self.step_gap_itemset,
+                )
+                + self._get_shannonInfo_byItemlist_infoEMA(
+                    idxes,
+                    step_gap=self.step_gap_itemlist_ema,
+                )
+            )
+
+        if self.proc_stream_mode == 'item_list_infoEMA':
+            return self._get_shannonInfo_byItemlist_infoEMA(idxes)
+
+        if self.proc_stream_mode == 'item_list_infoGlobal':
+            return self._get_shannonInfo_byItemlist_infoGlobal(idxes)
+
+        if self.proc_stream_mode == 'item_list_partialEntropyEMA':
+            return self._get_partialEntropy_byItemlist_EMA(idxes)
+
+        if self.proc_stream_mode == 'item_list_partialEntropyGlobal':
+            return self._get_partialEntropy_byItemlist_Global(idxes)
+
+        raise ValueError(f'Unsupported proc_stream_mode: {self.proc_stream_mode}')
+
+    def _get_shannonInfo_byItemset(self, idxes, step_gap=None):
+        # Handle step_gap 0 for first occurrences by assigning weight 1.
+        step_gap = self.step_gap if step_gap is None else step_gap
+        iw = torch.where(step_gap[idxes] == 0, self.const_e, step_gap[idxes])
+        return torch.log(self._apply_step_bounds(iw))
+
+    def _get_shannonInfo_byItemlist_infoEMA(self, idxes, step_gap=None):
+        probabilities = self._get_probabilities_byItemlist_EMA(idxes, step_gap)
+        return self.getInfo(probabilities)
+
+    def _get_shannonInfo_byItemlist_infoGlobal(self, idxes):
+        counts, total = self._get_count_state_byItemlist_Global(idxes)
+        return torch.log2(total) - torch.log2(counts)
+
+    def _get_partialEntropy_byItemlist_EMA(self, idxes):
+        probabilities = self._get_probabilities_byItemlist_EMA(idxes)
+        return probabilities * self.getInfo(probabilities)
+
+    def _get_partialEntropy_byItemlist_Global(self, idxes):
+        counts, total = self._get_count_state_byItemlist_Global(idxes)
+        probabilities = counts / total
+        information = torch.log2(total) - torch.log2(counts)
+        return probabilities * information
+
+    def _get_probabilities_byItemlist_EMA(self, idxes, step_gap=None):
+        step_gap = self.step_gap if step_gap is None else step_gap
+        probabilities = step_gap[idxes]
+        if (probabilities <= 0).any():
+            raise ValueError("'step_gap' has a non-positive value")
+        return probabilities
+
+    def _get_count_state_byItemlist_Global(self, idxes):
+        if self.total_occurrence == 0:
+            raise ValueError(
+                'Cannot calculate information before processing a stream'
+            )
+
+        counts = self.step_gap[idxes]
+        if (counts <= 0).any():
+            raise ValueError("'step_gap' has a non-positive value")
+
+        total = torch.tensor(
+            self.total_occurrence,
+            dtype=counts.dtype,
+            device=counts.device,
+        )
+        return counts, total
+
+    def _apply_step_bounds(self, values):
         if self.steplowerbound > 1 and self.stepupperbound > 1:
-            x =  torch.where(iw <= self.steplowerbound, self.steplowerbound, \
-                             torch.where(iw >= self.stepupperbound, self.stepupperbound, iw))
+            return torch.where(
+                values <= self.steplowerbound,
+                self.steplowerbound,
+                torch.where(
+                    values >= self.stepupperbound,
+                    self.stepupperbound,
+                    values,
+                ),
+            )
         elif self.steplowerbound > 1:
-            x =  torch.where(iw <= self.steplowerbound, self.steplowerbound, iw)
+            return torch.where(values <= self.steplowerbound, self.steplowerbound, values)
         elif self.stepupperbound > 1:
-            x =  torch.where(iw >= self.stepupperbound, self.stepupperbound, iw)
-        else:
-            x = iw
-        return  torch.log(x)
+            return torch.where(values >= self.stepupperbound, self.stepupperbound, values)
+        return values
 
     def getInfo(self, probabilities):
-        return (-torch.log2(probabilities)).clamp(0, 20.0)
+        return -torch.log2(probabilities)
     
     # def reset(self):
     #     self.step_gap.zero_()

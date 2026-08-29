@@ -27,8 +27,15 @@ def parse_global_args(parser):
                         ))
     parser.add_argument(
         '--proc_stream_mode',
-        choices=['item_set', 'item_list'],
-        default='item_list',
+        choices=[
+            'item_set_info',
+            'item_list_infoEMA',
+            'item_list_infoGlobal',
+            'item_list_partialEntropyEMA',
+            'item_list_partialEntropyGlobal',
+            'item_both_info',
+        ],
+        default='item_list_infoEMA',
         help='Input mode for proc new stream block',
     )
     parser.add_argument('--log_file', type=str, default='',
