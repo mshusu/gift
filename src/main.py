@@ -25,6 +25,12 @@ def parse_global_args(parser):
                             'Console logging level: 10 shows epoch details, '
                             '20 shows snapshot summaries, and 30 shows warnings only.'
                         ))
+    parser.add_argument(
+        '--proc_stream_mode',
+        choices=['item_set', 'item_list'],
+        default='item_list',
+        help='Input mode for proc new stream block',
+    )
     parser.add_argument('--log_file', type=str, default='',
                         help='Logging file path')
     parser.add_argument('--result_file', type=str, default='',
@@ -348,6 +354,7 @@ if __name__ == '__main__':
     if 'globalinfocontent' in init_args.dyn_method:
         log_args2.append(str(args.strefreq_alpha))
         log_args2.append(args.gitf_weight_mode)
+        log_args2.append(args.proc_stream_mode)
         print(f'GI weight mode: {args.gitf_weight_mode}')
     log_args3 = []
 

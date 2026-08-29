@@ -93,6 +93,7 @@ class Runner(object):
                 args.strefreq_alpha, 
                 args.strefreq_steplowerbound, 
                 args.strefreq_stepupperbound,
+                proc_stream_mode=args.proc_stream_mode,
             )
 
 
@@ -180,7 +181,7 @@ class Runner(object):
 
         if self.stream_frequency:
             logging.info('doing global info-content for stage: {}'.format(snap_idx))
-            self.stream_frequency.proc_newStreamDocs(data_dict.item_set)
+            self.stream_frequency.proc_newStream(data_dict)
 
         if model.optimizer is None:
             model.optimizer = self._build_optimizer(model)
@@ -398,7 +399,7 @@ class Runner(object):
         #self, data, prev_data, snap_idx,reduction
         if self.stream_frequency:
             pos_items = current['item_id'][:,:1].squeeze(-1)
-            w = self.stream_frequency.get_minus_log_probability(pos_items)
+            w = self.stream_frequency.get_shannonInfoConent(pos_items)
         else:
             w = None
         total_loss = model.loss(current, reduction='mean', gitf_w=w)
