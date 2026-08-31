@@ -36,6 +36,7 @@ def parse_global_args(parser):
             'item_list_parEntropyEMA',
             'item_list_parEntropyGlobal',
             'item_both_infoFr',
+            'item_both_infoPr',
             'item_both_partialEntropy',
         ],
         default='item_list_infoPrEMA',

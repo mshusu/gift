@@ -26,6 +26,7 @@ class bStreamFrequencyV3:
             'item_list_parEntropyEMA',
             'item_list_parEntropyGlobal',
             'item_both_infoFr',
+            'item_both_infoPr',
             'item_both_partialEntropy',
         }
         if proc_stream_mode not in valid_modes:
@@ -50,12 +51,17 @@ class bStreamFrequencyV3:
             self.proc_stream_mode = proc_stream_mode
             if proc_stream_mode in {
                 'item_both_infoFr',
+                'item_both_infoPr',
                 'item_both_partialEntropy',
             }:
                 self.step_gap_itemset = torch.zeros(doc_count, device=self.device)
-                self.step_latest_itemset = torch.zeros(doc_count, device=self.device)
                 self.step_gap_itemlist_ema = torch.zeros(doc_count, device=self.device)
                 self.step_latest_itemlist_ema = torch.zeros(doc_count, device=self.device)
+            if proc_stream_mode in {
+                'item_both_infoFr',
+                'item_both_partialEntropy',
+            }:
+                self.step_latest_itemset = torch.zeros(doc_count, device=self.device)
             #self.resetflagAcrEpoch = resetflag
     
     def proc_newStream(self, data_dict):
@@ -64,6 +70,18 @@ class bStreamFrequencyV3:
 
         if self.proc_stream_mode == 'item_set_infoFr':
             return self.proc_newStream_byItemset_Fr(data_dict.item_set)
+
+        if self.proc_stream_mode == 'item_both_infoPr':
+            self.proc_newStream_byItemset_Pr(
+                data_dict.item_set,
+                step_gap=self.step_gap_itemset,
+            )
+            return self.proc_newStream_byItemlist_infoEMA(
+                data_dict.trainItem,
+                step_gap=self.step_gap_itemlist_ema,
+                step_latest=self.step_latest_itemlist_ema,
+                increment_time=False,
+            )
 
         if self.proc_stream_mode in {
             'item_both_infoFr',
@@ -112,17 +130,18 @@ class bStreamFrequencyV3:
         ids = torch.as_tensor(list(item_set), dtype=torch.long, device=self.device)
         self._update_step_state(ids, self.global_t, step_gap, step_latest)
 
-    def proc_newStream_byItemset_Pr(self, item_set):
+    def proc_newStream_byItemset_Pr(self, item_set, step_gap=None):
         self.global_t += 1
         self.total_snapshot_blocks += 1
 
+        step_gap = self.step_gap if step_gap is None else step_gap
         ids = torch.as_tensor(list(item_set), dtype=torch.long, device=self.device)
         counts = torch.ones(
             len(ids),
-            dtype=self.step_gap.dtype,
+            dtype=step_gap.dtype,
             device=self.device,
         )
-        self._update_step_state_with_counts(ids, counts)
+        self._update_step_state_with_counts(ids, counts, step_gap=step_gap)
 
     def proc_newStream_byItemlist_infoEMA(
         self,
@@ -225,12 +244,25 @@ class bStreamFrequencyV3:
         )
         step_latest[ids] = t
 
-    def _update_step_state_with_counts(self, ids, counts):
-        self.step_gap[ids] += counts
+    def _update_step_state_with_counts(self, ids, counts, step_gap=None):
+        step_gap = self.step_gap if step_gap is None else step_gap
+        step_gap[ids] += counts
     
     def get_streamWeight(self, idxes):
         if self.proc_stream_mode == 'item_set_infoPr':
             return self._get_shannonInfo_byItemset_Pr(idxes)
+
+        if self.proc_stream_mode == 'item_both_infoPr':
+            return (
+                self._get_shannonInfo_byItemset_Pr(
+                    idxes,
+                    step_gap=self.step_gap_itemset,
+                )
+                + self._get_shannonInfo_byItemlist_infoEMA(
+                    idxes,
+                    step_gap=self.step_gap_itemlist_ema,
+                )
+            )
 
         if self.proc_stream_mode == 'item_set_infoFr':
             return self._get_shannonInfo_byItemset(idxes)
@@ -271,13 +303,14 @@ class bStreamFrequencyV3:
         information, _ = self._get_itemset_info_and_probability(idxes, step_gap)
         return information
 
-    def _get_shannonInfo_byItemset_Pr(self, idxes):
+    def _get_shannonInfo_byItemset_Pr(self, idxes, step_gap=None):
         if self.total_snapshot_blocks == 0:
             raise ValueError(
                 'Cannot calculate information before processing a stream'
             )
 
-        counts = self.step_gap[idxes]
+        step_gap = self.step_gap if step_gap is None else step_gap
+        counts = step_gap[idxes]
         if (counts <= 0).any():
             raise ValueError("'step_gap' has a non-positive value")
 
