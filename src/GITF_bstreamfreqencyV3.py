@@ -14,15 +14,16 @@ V3: give everyone 0 initilly
 """
 class bStreamFrequencyV3:
     def __init__(
-                    self, doc_count, alpha, steplowerbound, stepupperbound,
-                    proc_stream_mode='item_list_infoEMA',
+        self, doc_count, alpha, steplowerbound, stepupperbound,
+                    proc_stream_mode='item_list_infoEMA', pro_alpha=1.0,
                 ):
         valid_modes = {
             'item_set_info',
             'item_list_infoEMA',
             'item_list_infoGlobal',
-            'item_list_partialEntropyEMA',
-            'item_list_partialEntropyGlobal',
+            'item_list_parEntropyProbEMA',
+            'item_list_parEntropyEMA',
+            'item_list_parEntropyGlobal',
             'item_both_info',
             'item_both_partialEntropy',
         }
@@ -38,6 +39,7 @@ class bStreamFrequencyV3:
             self.step_latest = torch.zeros(doc_count, device=self.device)
             #self.step_latest_flag = torch.zeros(doc_count, device='cuda', dtype=torch.bool)
             self.alpha = alpha
+            self.pro_alpha = pro_alpha
             self.steplowerbound = steplowerbound
             self.stepupperbound = stepupperbound
             self.const_e = torch.exp(torch.tensor(1.0, device=self.device)) # 2.71828...
@@ -76,13 +78,16 @@ class bStreamFrequencyV3:
 
         if self.proc_stream_mode in {
             'item_list_infoEMA',
-            'item_list_partialEntropyEMA',
+            'item_list_parEntropyProbEMA',
         }:
             return self.proc_newStream_byItemlist_infoEMA(data_dict.trainItem)
 
+        if self.proc_stream_mode == 'item_list_parEntropyEMA':
+            return self.proc_newStream_byItemlist_parEntropyEMA(data_dict.trainItem)
+
         if self.proc_stream_mode in {
             'item_list_infoGlobal',
-            'item_list_partialEntropyGlobal',
+            'item_list_parEntropyGlobal',
         }:
             return self.proc_newStream_byItemlist_infoGlobal(data_dict.trainItem)
 
@@ -129,6 +134,34 @@ class bStreamFrequencyV3:
             step_latest,
         )
 
+    def proc_newStream_byItemlist_parEntropyEMA(
+        self,
+        item_list,
+        step_gap=None,
+        step_latest=None,
+        increment_time=True,
+    ):
+        if len(item_list) == 0:
+            raise ValueError('Cannot process an empty stream item list')
+        ids_np, counts_np = np.unique(item_list, return_counts=True)
+        probs_np = counts_np.astype(np.float32) / len(item_list)
+
+        ids = torch.from_numpy(ids_np).long().to(self.device)
+        probs = torch.from_numpy(probs_np).float().to(self.device)
+        partial_entropy = probs * self.getInfo(probs)
+
+        if increment_time:
+            self.global_t += 1
+        step_gap = self.step_gap if step_gap is None else step_gap
+        step_latest = self.step_latest if step_latest is None else step_latest
+        self._update_step_state_with_partialEntropy(
+            ids,
+            partial_entropy,
+            self.global_t,
+            step_gap,
+            step_latest,
+        )
+
     def proc_newStream_byItemlist_infoGlobal(self, item_list):
         if len(item_list) == 0:
             raise ValueError('Cannot process an empty stream item list')
@@ -155,8 +188,23 @@ class bStreamFrequencyV3:
 
     def _update_step_state_with_probs(self, ids, probs, t, step_gap, step_latest):
         step_gap[ids] = (
-            (1 - self.alpha) ** (t - step_latest[ids]) * step_gap[ids]
-            + torch.where(step_gap[ids] == 0, 1, self.alpha) * probs
+            (1 - self.pro_alpha) ** (t - step_latest[ids]) * step_gap[ids]
+            + torch.where(step_gap[ids] == 0, 1, self.pro_alpha) * probs
+        )
+        step_latest[ids] = t
+
+    def _update_step_state_with_partialEntropy(
+        self,
+        ids,
+        partial_entropy,
+        t,
+        step_gap,
+        step_latest,
+    ):
+        step_gap[ids] = (
+            (1 - self.pro_alpha) ** (t - step_latest[ids]) * step_gap[ids]
+            + torch.where(step_latest[ids] == 0, 1, self.pro_alpha)
+            * partial_entropy
         )
         step_latest[ids] = t
 
@@ -188,10 +236,13 @@ class bStreamFrequencyV3:
         if self.proc_stream_mode == 'item_list_infoGlobal':
             return self._get_shannonInfo_byItemlist_infoGlobal(idxes)
 
-        if self.proc_stream_mode == 'item_list_partialEntropyEMA':
+        if self.proc_stream_mode == 'item_list_parEntropyProbEMA':
             return self._get_partialEntropy_byItemlist_EMA(idxes)
 
-        if self.proc_stream_mode == 'item_list_partialEntropyGlobal':
+        if self.proc_stream_mode == 'item_list_parEntropyEMA':
+            return self._get_partialEntropy_byItemlist_parEntropyEMA(idxes)
+
+        if self.proc_stream_mode == 'item_list_parEntropyGlobal':
             return self._get_partialEntropy_byItemlist_Global(idxes)
 
         raise ValueError(f'Unsupported proc_stream_mode: {self.proc_stream_mode}')
@@ -211,6 +262,12 @@ class bStreamFrequencyV3:
     def _get_partialEntropy_byItemlist_EMA(self, idxes):
         probabilities = self._get_probabilities_byItemlist_EMA(idxes)
         return probabilities * self.getInfo(probabilities)
+
+    def _get_partialEntropy_byItemlist_parEntropyEMA(self, idxes):
+        partial_entropy = self.step_gap[idxes]
+        if (partial_entropy < 0).any():
+            raise ValueError("'step_gap' has a negative value")
+        return partial_entropy
 
     def _get_partialEntropy_byItemlist_Global(self, idxes):
         counts, total = self._get_count_state_byItemlist_Global(idxes)

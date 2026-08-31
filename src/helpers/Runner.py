@@ -44,7 +44,18 @@ class Runner(object):
                             help='')
         
         # for global info-content training framework (gitf)
-        parser.add_argument("--strefreq_alpha", type=float, default=0.01)
+        parser.add_argument(
+            '--strefreq_alpha',
+            type=float,
+            default=0.01,
+            help='Smoothing coefficient for interval EMA based on block item set.',
+        )
+        parser.add_argument(
+            '--strefreq_pro_alpha',
+            type=float,
+            default=1.0,
+            help='Smoothing coefficient for probability EMA based on block item list.',
+        )
         parser.add_argument("--strefreq_steplowerbound", type=float, default=-1) # 2.71828
         parser.add_argument("--strefreq_stepupperbound", type=float, default=-1) # 1096
         parser.add_argument(
@@ -94,6 +105,7 @@ class Runner(object):
                 args.strefreq_steplowerbound, 
                 args.strefreq_stepupperbound,
                 proc_stream_mode=args.proc_stream_mode,
+                pro_alpha=args.strefreq_pro_alpha,
             )
 
 

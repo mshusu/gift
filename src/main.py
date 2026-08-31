@@ -31,8 +31,9 @@ def parse_global_args(parser):
             'item_set_info',
             'item_list_infoEMA',
             'item_list_infoGlobal',
-            'item_list_partialEntropyEMA',
-            'item_list_partialEntropyGlobal',
+            'item_list_parEntropyProbEMA',
+            'item_list_parEntropyEMA',
+            'item_list_parEntropyGlobal',
             'item_both_info',
             'item_both_partialEntropy',
         ],
@@ -361,6 +362,7 @@ if __name__ == '__main__':
     log_args2 = [init_args.model_name, init_args.dyn_method]
     if 'globalinfocontent' in init_args.dyn_method:
         log_args2.append(str(args.strefreq_alpha))
+        log_args2.append(str(args.strefreq_pro_alpha))
         log_args2.append(args.gitf_weight_mode)
         log_args2.append(args.proc_stream_mode)
         print(f'GI weight mode: {args.gitf_weight_mode}')
