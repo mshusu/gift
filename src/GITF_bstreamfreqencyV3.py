@@ -44,7 +44,7 @@ class bStreamFrequencyV3:
             self.pro_alpha = pro_alpha
             self.steplowerbound = steplowerbound
             self.stepupperbound = stepupperbound
-            self.const_e = torch.exp(torch.tensor(1.0, device=self.device)) # 2.71828...
+            self.const_two = torch.tensor(2.0, device=self.device)
             self.global_t = 0
             self.total_occurrence = 0
             self.total_snapshot_blocks = 0
@@ -363,9 +363,9 @@ class bStreamFrequencyV3:
     def _get_itemset_info_and_probability(self, idxes, step_gap=None):
         # Handle step_gap 0 for first occurrences by assigning weight 1.
         step_gap = self.step_gap if step_gap is None else step_gap
-        iw = torch.where(step_gap[idxes] == 0, self.const_e, step_gap[idxes])
+        iw = torch.where(step_gap[idxes] == 0, self.const_two, step_gap[idxes])
         iw = self._apply_step_bounds(iw)
-        return torch.log(iw), 1.0 / iw
+        return torch.log2(iw), 1.0 / iw
 
     def _get_probabilities_byItemlist_EMA(self, idxes, step_gap=None):
         step_gap = self.step_gap if step_gap is None else step_gap
