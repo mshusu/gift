@@ -92,7 +92,10 @@ ___
 ## Command-Line Options
 
 * `--dataset <name>`
-  Choose from `Amazon-cds`, `Amazon-games`, or `Gowalla`.
+  Choose from `Amazon-cds`, `Amazon-games`, `Gowalla`,
+  `Retailrocket-view`, `Retailrocket-view-dedup`,
+  `Retailrocket-addtocart`, `Retailrocket-addtocart-dedup`,
+  `Retailrocket-transaction`, or `Retailrocket-transaction-dedup`.
 
 * `--model_name <LGN|PISA_LGN>`
   `LGN` for vanilla backbone, or `PISA_LGN` for our stability-plasticity method.

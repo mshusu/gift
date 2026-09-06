@@ -15,6 +15,17 @@ import copy
 import os,sys
 os.chdir(sys.path[0]) 
 
+
+RETAILROCKET_DATASETS = {
+    'Retailrocket-view',
+    'Retailrocket-view-dedup',
+    'Retailrocket-addtocart',
+    'Retailrocket-addtocart-dedup',
+    'Retailrocket-transaction',
+    'Retailrocket-transaction-dedup',
+}
+
+
 class Reader(object):
     @staticmethod
     def parse_data_args(parser):
@@ -22,8 +33,15 @@ class Reader(object):
                             help='Input data dir.')
         parser.add_argument('--suffix', type=str, default='pisa',
                             help='Input data dir.')
-        parser.add_argument('--dataset', type=str, default='',
-                            help='Choose a dataset.')
+        parser.add_argument(
+            '--dataset',
+            type=str,
+            default='',
+            help=(
+                'Dataset name, including Gowalla, Amazon-games, Amazon-cds, '
+                'or a Retailrocket-* dataset.'
+            ),
+        )
         parser.add_argument('--sep', type=str, default='\t',
                             help='Sep of csv file.')
         parser.add_argument('--train_ratio', type=float, default=0.8,
@@ -66,8 +84,7 @@ class Reader(object):
         print(       '"# user": {}, "# item": {}, "# entry": {}'.format(self.n_users, self.n_items, self.dataset_size))
         #self.path = os.path.join(self.prefix, self.dataset, self.suffix, self.s_fname)
         self.path = os.path.join(self.prefix, self.dataset, self.suffix, self.s_fname)
-        if not os.path.exists(self.path):
-            os.mkdir(self.path)
+        os.makedirs(self.path, exist_ok=True)
 
         self._set_snap_boundaries()
         self._save_snapshot_files()
@@ -147,9 +164,8 @@ class Reader(object):
 
 
     def _save_snapshot_files(self):
-        self.snapshots_path = os.path.join(self.prefix, self.dataset, self.suffix, self.s_fname, 'snapshots')
-        if not os.path.exists(self.snapshots_path):
-            os.mkdir(self.snapshots_path)
+        self.snapshots_path = os.path.join(self.path, 'snapshots')
+        os.makedirs(self.snapshots_path, exist_ok=True)
 
         for idx, snap_boundary in enumerate(self.snap_boundaries):
             snapshot_train = self.data_df[:(snap_boundary)].values.astype(np.int64)
@@ -183,12 +199,32 @@ class Reader(object):
             utils.write_interactions_to_file(os.path.join(self.snapshots_path, 'test_block'+str(idx)), test_block)
 
     def _read_data(self):
-        logging.info('Reading data from \"{}\", dataset = \"{}\", suffix = \"{}\", fname = \"{}\" '.format(self.prefix, self.dataset, self.suffix, self.fname))
-        self.df = pd.read_csv(os.path.join(self.prefix, self.dataset, self.suffix, self.fname +'.csv'), sep=self.sep)  # Let the main runner decide the ratio of train/test
+        if self.dataset in RETAILROCKET_DATASETS:
+            data_path = os.path.join(
+                self.prefix,
+                'Retailrocket',
+                self.dataset + '.csv',
+            )
+            separator = '\t'
+        else:
+            data_path = os.path.join(
+                self.prefix,
+                self.dataset,
+                self.suffix,
+                self.fname + '.csv',
+            )
+            separator = self.sep
+
+        logging.info(
+            'Reading dataset %s from %s',
+            self.dataset,
+            data_path,
+        )
+        self.df = pd.read_csv(data_path, sep=separator)
         self.data_df = self.df.loc[:, ['user_id', 'item_id']]  #.values.astype(np.int64) # (number of items, 2)
         
     def _save_user_clicked_set(self):
-        user_clicked_set_path = os.path.join(self.prefix, self.dataset, self.suffix, self.s_fname, 'user_clicked_set.txt')
+        user_clicked_set_path = os.path.join(self.path, 'user_clicked_set.txt')
         logging.info('Load user_clicked_set')
         self.user_clicked_set = self.data_df.groupby(['user_id'])['item_id'].unique().to_dict()
 
