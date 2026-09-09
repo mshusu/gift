@@ -95,7 +95,9 @@ ___
   Choose from `Amazon-cds`, `Amazon-games`, `Gowalla`,
   `Retailrocket-view`, `Retailrocket-view-dedup`,
   `Retailrocket-addtocart`, `Retailrocket-addtocart-dedup`,
-  `Retailrocket-transaction`, or `Retailrocket-transaction-dedup`.
+  `Retailrocket-transaction`, `Retailrocket-transaction-dedup`,
+  `Retailrocket-view-dedup-3core`, `Retailrocket-view-dedup-3udeg`, or
+  `Retailrocket-view-dedup-3ideg`.
 
 * `--model_name <LGN|PISA_LGN>`
   `LGN` for vanilla backbone, or `PISA_LGN` for our stability-plasticity method.

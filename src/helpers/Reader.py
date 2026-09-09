@@ -16,13 +16,16 @@ import os,sys
 os.chdir(sys.path[0]) 
 
 
-RETAILROCKET_DATASETS = {
-    'Retailrocket-view',
-    'Retailrocket-view-dedup',
-    'Retailrocket-addtocart',
-    'Retailrocket-addtocart-dedup',
-    'Retailrocket-transaction',
-    'Retailrocket-transaction-dedup',
+RETAILROCKET_DATASET_DIRECTORIES = {
+    'Retailrocket-view': 'Retailrocket',
+    'Retailrocket-view-dedup': 'Retailrocket',
+    'Retailrocket-addtocart': 'Retailrocket',
+    'Retailrocket-addtocart-dedup': 'Retailrocket',
+    'Retailrocket-transaction': 'Retailrocket',
+    'Retailrocket-transaction-dedup': 'Retailrocket',
+    'Retailrocket-view-dedup-3core': os.path.join('Retailrocket', 'x-core'),
+    'Retailrocket-view-dedup-3udeg': os.path.join('Retailrocket', 'x-core'),
+    'Retailrocket-view-dedup-3ideg': os.path.join('Retailrocket', 'x-core'),
 }
 
 
@@ -39,7 +42,7 @@ class Reader(object):
             default='',
             help=(
                 'Dataset name, including Gowalla, Amazon-games, Amazon-cds, '
-                'or a Retailrocket-* dataset.'
+                'or a Retailrocket-* dataset, including x-core variants.'
             ),
         )
         parser.add_argument('--sep', type=str, default='\t',
@@ -199,10 +202,10 @@ class Reader(object):
             utils.write_interactions_to_file(os.path.join(self.snapshots_path, 'test_block'+str(idx)), test_block)
 
     def _read_data(self):
-        if self.dataset in RETAILROCKET_DATASETS:
+        if self.dataset in RETAILROCKET_DATASET_DIRECTORIES:
             data_path = os.path.join(
                 self.prefix,
-                'Retailrocket',
+                RETAILROCKET_DATASET_DIRECTORIES[self.dataset],
                 self.dataset + '.csv',
             )
             separator = '\t'
