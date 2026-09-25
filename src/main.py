@@ -349,6 +349,8 @@ if __name__ == '__main__':
         parser.error('--early_stop_min_delta must be non-negative')
     if args.max_grad_norm < 0:
         parser.error('--max_grad_norm must be non-negative')
+    if args.gitf_weight_start_snap < 0:
+        parser.error('--gitf_weight_start_snap must be non-negative')
 
     if init_args.dyn_method == 'finetune':
         pass
@@ -366,6 +368,7 @@ if __name__ == '__main__':
         log_args2.append(str(args.strefreq_alpha))
         log_args2.append(str(args.strefreq_pro_alpha))
         log_args2.append(args.gitf_weight_mode)
+        log_args2.append(str(args.gitf_weight_start_snap))
         log_args2.append(args.proc_stream_mode)
         print(f'GI weight mode: {args.gitf_weight_mode}')
     log_args3 = []

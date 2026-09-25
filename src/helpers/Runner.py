@@ -65,6 +65,15 @@ class Runner(object):
             choices=["margin", "example"],
             help="Apply GI weights to the BPR score margin or to each example loss.",
         )
+        parser.add_argument(
+            '--gitf_weight_start_snap',
+            type=int,
+            default=0,
+            help=(
+                'First snapshot index that passes stream weights to the model loss; '
+                'earlier snapshots still update stream state.'
+            ),
+        )
 
         return parser
 
@@ -88,6 +97,7 @@ class Runner(object):
         )
         self.result_file = args.result_file
         self.dyn_method = args.dyn_method
+        self.gitf_weight_start_snap = getattr(args, 'gitf_weight_start_snap', 0)
         self.time = None  # will store [start_time, last_step_time]
 
         self.snap_boundaries = corpus.snap_boundaries
@@ -409,7 +419,7 @@ class Runner(object):
         # Get recommender's prediction and loss from the ``current'' data at t
         #u_ids, i_ids, prev_data, data, snap_idx,reduction='mean'
         #self, data, prev_data, snap_idx,reduction
-        if self.stream_frequency:
+        if self.stream_frequency and time_idx >= self.gitf_weight_start_snap:
             pos_items = current['item_id'][:,:1].squeeze(-1)
             w = self.stream_frequency.get_streamWeight(pos_items)
         else:
