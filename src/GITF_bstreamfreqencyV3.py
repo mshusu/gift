@@ -16,6 +16,7 @@ class bStreamFrequencyV3:
     def __init__(
         self, doc_count, alpha, steplowerbound, stepupperbound,
                     proc_stream_mode='item_list_infoPrEMA', pro_alpha=1.0,
+                    pro_decay_exponent='snapshot_gap',
                 ):
         valid_modes = {
             'item_set_infoFr',
@@ -34,6 +35,11 @@ class bStreamFrequencyV3:
                 f"Unknown proc_stream_mode: {proc_stream_mode}. "
                 f'Expected one of {sorted(valid_modes)}.'
             )
+        if pro_decay_exponent not in {'snapshot_gap', 'one'}:
+            raise ValueError(
+                f"Unknown pro_decay_exponent: {pro_decay_exponent}. "
+                "Expected 'snapshot_gap' or 'one'."
+            )
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         with torch.no_grad():
             self.step_gap = torch.zeros(doc_count, device=self.device)
@@ -42,6 +48,7 @@ class bStreamFrequencyV3:
             #self.step_latest_flag = torch.zeros(doc_count, device='cuda', dtype=torch.bool)
             self.alpha = alpha
             self.pro_alpha = pro_alpha
+            self.pro_decay_exponent = pro_decay_exponent
             self.steplowerbound = steplowerbound
             self.stepupperbound = stepupperbound
             self.const_two = torch.tensor(2.0, device=self.device)
@@ -223,8 +230,9 @@ class bStreamFrequencyV3:
         #self.step_latest_flag[ids] = True
 
     def _update_step_state_with_probs(self, ids, probs, t, step_gap, step_latest):
+        decay_exponent = self._get_pro_decay_exponent(t, step_latest[ids])
         step_gap[ids] = (
-            (1 - self.pro_alpha) ** (t - step_latest[ids]) * step_gap[ids]
+            (1 - self.pro_alpha) ** decay_exponent * step_gap[ids]
             + torch.where(step_gap[ids] == 0, 1, self.pro_alpha) * probs
         )
         step_latest[ids] = t
@@ -237,12 +245,18 @@ class bStreamFrequencyV3:
         step_gap,
         step_latest,
     ):
+        decay_exponent = self._get_pro_decay_exponent(t, step_latest[ids])
         step_gap[ids] = (
-            (1 - self.pro_alpha) ** (t - step_latest[ids]) * step_gap[ids]
+            (1 - self.pro_alpha) ** decay_exponent * step_gap[ids]
             + torch.where(step_latest[ids] == 0, 1, self.pro_alpha)
             * partial_entropy
         )
         step_latest[ids] = t
+
+    def _get_pro_decay_exponent(self, t, step_latest):
+        if self.pro_decay_exponent == 'one':
+            return torch.ones_like(step_latest)
+        return t - step_latest
 
     def _update_step_state_with_counts(self, ids, counts, step_gap=None):
         step_gap = self.step_gap if step_gap is None else step_gap

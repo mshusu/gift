@@ -56,6 +56,15 @@ class Runner(object):
             default=1.0,
             help='Smoothing coefficient for probability EMA based on block item list.',
         )
+        parser.add_argument(
+            '--strefreq_pro_decay_exponent',
+            choices=['snapshot_gap', 'one'],
+            default='snapshot_gap',
+            help=(
+                'Exponent for probability/partial-entropy EMA decay: '
+                'snapshot_gap uses the elapsed snapshot gap, one uses exponent 1.'
+            ),
+        )
         parser.add_argument("--strefreq_steplowerbound", type=float, default=-1) # 2.71828
         parser.add_argument("--strefreq_stepupperbound", type=float, default=-1) # 1096
         parser.add_argument(
@@ -116,6 +125,7 @@ class Runner(object):
                 args.strefreq_stepupperbound,
                 proc_stream_mode=args.proc_stream_mode,
                 pro_alpha=args.strefreq_pro_alpha,
+                pro_decay_exponent=args.strefreq_pro_decay_exponent,
             )
 
 
