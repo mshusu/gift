@@ -17,6 +17,7 @@ class bStreamFrequencyV3:
         self, doc_count, alpha, steplowerbound, stepupperbound,
                     proc_stream_mode='item_list_infoPrEMA', pro_alpha=1.0,
                     pro_decay_exponent='snapshot_gap',
+                    inter_block_weight=0.5,
                 ):
         valid_modes = {
             'item_set_infoFr',
@@ -40,6 +41,8 @@ class bStreamFrequencyV3:
                 f"Unknown pro_decay_exponent: {pro_decay_exponent}. "
                 "Expected 'snapshot_gap' or 'one'."
             )
+        if not 0.0 <= inter_block_weight <= 1.0:
+            raise ValueError('inter_block_weight must be between 0 and 1')
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         with torch.no_grad():
             self.step_gap = torch.zeros(doc_count, device=self.device)
@@ -49,6 +52,8 @@ class bStreamFrequencyV3:
             self.alpha = alpha
             self.pro_alpha = pro_alpha
             self.pro_decay_exponent = pro_decay_exponent
+            self.inter_block_weight = inter_block_weight
+            self.intra_block_weight = 1.0 - inter_block_weight
             self.steplowerbound = steplowerbound
             self.stepupperbound = stepupperbound
             self.const_two = torch.tensor(2.0, device=self.device)
@@ -268,11 +273,11 @@ class bStreamFrequencyV3:
 
         if self.proc_stream_mode == 'item_both_infoPr':
             return (
-                self._get_shannonInfo_byItemset_Pr(
+                self.inter_block_weight * self._get_shannonInfo_byItemset_Pr(
                     idxes,
                     step_gap=self.step_gap_itemset,
                 )
-                + self._get_shannonInfo_byItemlist_infoEMA(
+                + self.intra_block_weight * self._get_shannonInfo_byItemlist_infoEMA(
                     idxes,
                     step_gap=self.step_gap_itemlist_ema,
                 )
@@ -283,11 +288,11 @@ class bStreamFrequencyV3:
 
         if self.proc_stream_mode == 'item_both_infoFr':
             return (
-                self._get_shannonInfo_byItemset(
+                self.inter_block_weight * self._get_shannonInfo_byItemset(
                     idxes,
                     step_gap=self.step_gap_itemset,
                 )
-                + self._get_shannonInfo_byItemlist_infoEMA(
+                + self.intra_block_weight * self._get_shannonInfo_byItemlist_infoEMA(
                     idxes,
                     step_gap=self.step_gap_itemlist_ema,
                 )
@@ -370,8 +375,8 @@ class bStreamFrequencyV3:
         )
         ema_info = self.getInfo(ema_probability)
         return (
-            itemset_probability * itemset_info
-            + ema_probability * ema_info
+            self.inter_block_weight * itemset_probability * itemset_info
+            + self.intra_block_weight * ema_probability * ema_info
         )
 
     def _get_itemset_info_and_probability(self, idxes, step_gap=None):

@@ -351,6 +351,8 @@ if __name__ == '__main__':
         parser.error('--max_grad_norm must be non-negative')
     if args.gitf_weight_start_snap < 0:
         parser.error('--gitf_weight_start_snap must be non-negative')
+    if not 0.0 <= args.strefreq_inter_block_weight <= 1.0:
+        parser.error('--strefreq_inter_block_weight must be between 0 and 1')
 
     if init_args.dyn_method == 'finetune':
         pass

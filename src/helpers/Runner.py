@@ -65,6 +65,15 @@ class Runner(object):
                 'snapshot_gap uses the elapsed snapshot gap, one uses exponent 1.'
             ),
         )
+        parser.add_argument(
+            '--strefreq_inter_block_weight',
+            type=float,
+            default=0.5,
+            help=(
+                'Weight of the inter-block contribution in item_both modes; '
+                'the intra-block contribution is 1 minus this value.'
+            ),
+        )
         parser.add_argument("--strefreq_steplowerbound", type=float, default=-1) # 2.71828
         parser.add_argument("--strefreq_stepupperbound", type=float, default=-1) # 1096
         parser.add_argument(
@@ -126,6 +135,7 @@ class Runner(object):
                 proc_stream_mode=args.proc_stream_mode,
                 pro_alpha=args.strefreq_pro_alpha,
                 pro_decay_exponent=args.strefreq_pro_decay_exponent,
+                inter_block_weight=args.strefreq_inter_block_weight,
             )
 
 
