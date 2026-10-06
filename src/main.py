@@ -369,6 +369,7 @@ if __name__ == '__main__':
     if 'globalinfocontent' in init_args.dyn_method:
         log_args2.append(str(args.strefreq_alpha))
         log_args2.append(str(args.strefreq_pro_alpha))
+        log_args2.append(str(args.strefreq_inter_block_weight))
         log_args2.append(args.gitf_weight_mode)
         log_args2.append(str(args.gitf_weight_start_snap))
         log_args2.append(args.proc_stream_mode)
