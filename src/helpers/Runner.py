@@ -80,8 +80,13 @@ class Runner(object):
             "--gitf_weight_mode",
             type=str,
             default="margin",
-            choices=["margin", "example"],
-            help="Apply GI weights to the BPR score margin or to each example loss.",
+            choices=["margin", "example", "margin_both"],
+            help=(
+                "Apply GI weights to the BPR score margin or to each example "
+                "loss. 'margin_both' scales the positive prediction by the "
+                "positive-item weight and each negative prediction by its "
+                "own negative-item weight in the margin."
+            ),
         )
         parser.add_argument(
             '--gitf_weight_start_snap',
@@ -440,8 +445,15 @@ class Runner(object):
         #u_ids, i_ids, prev_data, data, snap_idx,reduction='mean'
         #self, data, prev_data, snap_idx,reduction
         if self.stream_frequency and time_idx >= self.gitf_weight_start_snap:
-            pos_items = current['item_id'][:,:1].squeeze(-1)
-            w = self.stream_frequency.get_streamWeight(pos_items)
+            if getattr(model, 'gitf_weight_mode', None) == 'margin_both':
+                # weights for the positive item and each negative item
+                item_ids = current['item_id'].reshape(-1)
+                w = self.stream_frequency.get_streamWeight(item_ids).reshape(
+                    current['item_id'].shape
+                )
+            else:
+                pos_items = current['item_id'][:,:1].squeeze(-1)
+                w = self.stream_frequency.get_streamWeight(pos_items)
         else:
             w = None
         total_loss = model.loss(current, reduction='mean', gitf_w=w)

@@ -47,7 +47,7 @@ class Model(torch.nn.Module):
         self.item_num = corpus.n_items
         self.user_num = corpus.n_users
         self.gitf_weight_mode = args.gitf_weight_mode
-        if self.gitf_weight_mode not in {'margin', 'example'}:
+        if self.gitf_weight_mode not in {'margin', 'example', 'margin_both'}:
             raise ValueError(f'Unknown GI weight mode: {self.gitf_weight_mode}')
         self.optimizer = None
         self._define_params()
@@ -73,9 +73,15 @@ class Model(torch.nn.Module):
         margin = pos_pred[:, None] - neg_pred
         weights = None
         if gitf_w is not None:
-            weights = gitf_w.reshape(-1, 1)
-            if self.gitf_weight_mode == 'margin':
-                margin = margin * weights
+            if self.gitf_weight_mode == 'margin_both':
+                # gitf_w holds one weight per item: the positive item and each negative
+                pos_w = gitf_w[:, :1]
+                neg_w = gitf_w[:, 1:1 + self.num_neg]
+                margin = pos_w * pos_pred[:, None] - neg_w * neg_pred
+            else:
+                weights = gitf_w.reshape(-1, 1)
+                if self.gitf_weight_mode == 'margin':
+                    margin = margin * weights
 
         pair_loss = F.softplus(-margin)
         if weights is not None and self.gitf_weight_mode == 'example':
