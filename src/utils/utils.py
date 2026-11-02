@@ -27,6 +27,18 @@ def should_show_epoch_progress(console_level):
     return console_level <= logging.DEBUG and sys.stderr.isatty()
 
 
+def diversity_metrics_text(diversity):
+    """Format a diversity dict (e.g. {'coverage': [...], 'gini': [...]}) as result-file lines."""
+    Ks = [10, 20, 50, 100]
+    lines = []
+    for name, values in diversity.items():
+        for k, value in zip(Ks, values):
+            lines.append(f'{name.capitalize()}@{k}\t{round(float(value), 4)}')
+    if not lines:
+        return ''
+    return '\n'.join(lines) + '\n'
+
+
 def remove_checkpoint(path, protected_paths=()):
     path = os.path.abspath(path)
     protected_paths = {os.path.abspath(p) for p in protected_paths}

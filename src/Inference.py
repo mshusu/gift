@@ -331,7 +331,7 @@ def Test(args, model, corpus, data_type, data_idx):
 
 
 # inference excl. cold user & cold item
-def Test_excl_cold(args, model, test_loads, hist_loads, lite = False):
+def Test_excl_cold(args, model, test_loads, hist_loads, lite = False, diversity_out=None):
     batch_size = args.eval_batch_size if args.eval_batch_size > 0 else args.batch_size
     model.eval()
     device = model._device
@@ -392,6 +392,11 @@ def Test_excl_cold(args, model, test_loads, hist_loads, lite = False):
 
         recall, NDCG, MRR, precision = computeTopNAccuracy_fast(ground_truth_list, rating_list, Ks, lite)
 
+        if diversity_out is not None:
+            coverage, gini = compute_diversity_metrics(rating_list, hist_unique_items, Ks)
+            diversity_out['coverage'] = coverage
+            diversity_out['gini'] = gini
+
         return recall, NDCG, MRR, precision
 
 
@@ -436,7 +441,7 @@ def _flatten_user_item_pairs(user_items, users, item_mapping, device):
     )
 
 
-def Test_excl_cold_vectorized(args, model, test_loads, hist_loads, lite=False):
+def Test_excl_cold_vectorized(args, model, test_loads, hist_loads, lite=False, diversity_out=None):
     batch_size = args.eval_batch_size if args.eval_batch_size > 0 else args.batch_size
     model.eval()
     device = model._device
@@ -481,7 +486,9 @@ def Test_excl_cold_vectorized(args, model, test_loads, hist_loads, lite=False):
         )
         if overflow:
             logging.warning('Vectorized eval pair encoding would overflow int64; falling back to Test_excl_cold')
-            return Test_excl_cold(args, model, test_loads, hist_loads, lite=lite)
+            return Test_excl_cold(
+                args, model, test_loads, hist_loads, lite=lite, diversity_out=diversity_out
+            )
 
         truth_codes = []
         for row, user in enumerate(valid_test_users):
@@ -527,6 +534,10 @@ def Test_excl_cold_vectorized(args, model, test_loads, hist_loads, lite=False):
             for k in Ks:
                 recalls = hit_cumsum[:, k - 1] / test_item_counts
                 results['recall'].append(float(np.mean(recalls)))
+            if diversity_out is not None:
+                coverage, gini = compute_diversity_metrics(pred_items, hist_unique_items, Ks)
+                diversity_out['coverage'] = coverage
+                diversity_out['gini'] = gini
             return results['recall'], None, None, None
 
         weights = 1.0 / np.log2(np.arange(2, max_K + 2))
@@ -551,14 +562,68 @@ def Test_excl_cold_vectorized(args, model, test_loads, hist_loads, lite=False):
             results['mrr'].append(float(np.mean(mrrs)))
             results['precision'].append(float(np.mean(precisions)))
 
+        if diversity_out is not None:
+            coverage, gini = compute_diversity_metrics(pred_items, hist_unique_items, Ks)
+            diversity_out['coverage'] = coverage
+            diversity_out['gini'] = gini
+
         return results['recall'], results['ndcg'], results['mrr'], results['precision']
 
 
-def Test_excl_cold_selected(args, model, test_loads, hist_loads, lite=False):
-    if args.vectorized_eval:
-        return Test_excl_cold_vectorized(args, model, test_loads, hist_loads, lite=lite)
+def compute_diversity_metrics(predictedIndices, catalog_items, topN):
+    """
+    Aggregate diversity metrics over all users' top-K lists.
 
-    return Test_excl_cold(args, model, test_loads, hist_loads, lite=lite)
+    predictedIndices: list of NumPy arrays [num_users, max_K] with original item ids
+    catalog_items: NumPy array of the candidate catalog item ids
+    topN: List of int ( [10, 20, 50, 100] )
+
+    Returns (coverage, gini): one value per K in topN.
+    - coverage: fraction of the candidate catalog appearing in at least one top-K list
+    - gini: Gini coefficient of the recommendation counts over the catalog
+      (0 = every item recommended equally often, ->1 = a few items dominate)
+    """
+    pred = np.vstack(predictedIndices)
+    catalog_items = np.asarray(catalog_items)
+    catalog_size = len(catalog_items)
+
+    # Map original item ids to catalog indices for counting
+    id_to_idx = np.full(int(catalog_items.max()) + 1, -1, dtype=np.int64)
+    id_to_idx[catalog_items] = np.arange(catalog_size, dtype=np.int64)
+
+    coverage, gini = [], []
+    for k in topN:
+        codes = id_to_idx[pred[:, :k].reshape(-1)]
+        codes = codes[codes >= 0]
+        counts = np.bincount(codes, minlength=catalog_size)
+
+        coverage.append(float((counts > 0).sum() / catalog_size))
+
+        sorted_counts = np.sort(counts)
+        n = sorted_counts.size
+        total = sorted_counts.sum()
+        if total == 0 or n == 0:
+            gini_value = 0.0
+        else:
+            ranks = np.arange(1, n + 1)
+            gini_value = float(
+                (2.0 * (ranks * sorted_counts).sum()) / (n * total)
+                - (n + 1.0) / n
+            )
+        gini.append(gini_value)
+
+    return coverage, gini
+
+
+def Test_excl_cold_selected(args, model, test_loads, hist_loads, lite=False, diversity_out=None):
+    if args.vectorized_eval:
+        return Test_excl_cold_vectorized(
+            args, model, test_loads, hist_loads, lite=lite, diversity_out=diversity_out
+        )
+
+    return Test_excl_cold(
+        args, model, test_loads, hist_loads, lite=lite, diversity_out=diversity_out
+    )
 
 
 def _metric_text(value):

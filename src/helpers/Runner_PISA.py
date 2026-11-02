@@ -234,17 +234,24 @@ class Runner_PISA:
             f'snap_idx={snap_idx}, option={option}'
         )
         logging.info(eval_msg)
-        val_results = Inference.Test_excl_cold_selected(args, model, val_loads, hist_loads)
-        test_results = Inference.Test_excl_cold_selected(args, model, test_loads, hist_loads)
+        val_diversity, test_diversity = {}, {}
+        val_results = Inference.Test_excl_cold_selected(
+            args, model, val_loads, hist_loads, diversity_out=val_diversity
+        )
+        test_results = Inference.Test_excl_cold_selected(
+            args, model, test_loads, hist_loads, diversity_out=test_diversity
+        )
         logging.info("Trained model testing")
 
         # Save validation results
         val_str = Inference.print_results(None, val_results, None)
+        val_str += utils.diversity_metrics_text(val_diversity)
         val_path = os.path.join(self.test_result_file, f'{option}val_snap{snap_idx}.txt')
         open(val_path, 'w+').write(val_str)
 
         # Save test results
         test_str = Inference.print_results(None, None, test_results)
+        test_str += utils.diversity_metrics_text(test_diversity)
         test_path = os.path.join(self.test_result_file, f'{option}test_snap{snap_idx}.txt')
         open(test_path, 'w+').write(test_str)
 
@@ -252,6 +259,10 @@ class Runner_PISA:
         Ks = [10, 20, 50, 100]
         metrics = ['Recall', 'NDCG', 'MRR', 'Precision']
         json_results = {f'{metric}@{k}': v for metric, values in zip(metrics, test_results) for k, v in zip(Ks, values)}
+        for name, values in test_diversity.items():
+            json_results.update({
+                f'{name}@{k}': v for k, v in zip(Ks, values)
+            })
         json_path = os.path.join(self.test_result_file, f'{option}test_snap{snap_idx}.json')
         with open(json_path, 'w') as f:
             json.dump(json_results, f, indent=4)
