@@ -11,7 +11,7 @@ import gc
 
 from helpers import Reader, Runner, Runner_PISA, Runner_cons
 from models import  Model
-from models.general import LGN, PISA_LGN, Contrastive_LGN, BPR
+from models.general import LGN, PISA_LGN, Contrastive_LGN, BPR, LightCCF
 from models import Dataloader
 from utils import utils
 import pandas as pd
@@ -361,6 +361,14 @@ if __name__ == '__main__':
     elif 'pretrain' in init_args.dyn_method:
         args.tepoch = -1
 
+    if init_args.model_name == 'LightCCF':
+        # Faithful LightCCF reproduction: regularization comes from the
+        # explicit --lightccf_reg_lambda term only (the original repo's Adam
+        # has no weight decay), so the shared Adam weight decay is disabled.
+        if args.l2 != 0:
+            print(f'LightCCF ignores --l2 {args.l2}; regularization is controlled by --lightccf_reg_lambda')
+        args.l2 = 0.0
+
 
     args.s_fname = '{}_{}_{}_s{}_r{}'.format(args.split_type, args.train_ratio, args.batch_size, args.n_snapshots, args.t_opt)
     
@@ -388,6 +396,8 @@ if __name__ == '__main__':
     params = list(base_path_params)
     if 'PISA' in init_args.model_name:
         params += ['bound_weight', 'ratio']
+    if init_args.model_name == 'LightCCF':
+        params += ['lightccf_tau', 'lightccf_ssl_lambda', 'lightccf_reg_lambda']
 
     for arg in params:
         log_args3.append(arg + '=' + str(eval('args.' + arg)))
