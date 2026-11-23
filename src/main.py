@@ -382,6 +382,10 @@ if __name__ == '__main__':
         log_args2.append(str(args.gitf_weight_start_snap))
         log_args2.append(args.proc_stream_mode)
         print(f'GI weight mode: {args.gitf_weight_mode}')
+        # --gitf_na_layer is only defined for LightCCF
+        if getattr(init_args, 'model_name', None) == 'LightCCF' or hasattr(args, 'gitf_na_layer'):
+            log_args2.append(args.gitf_na_layer)
+            print(f'GI na layer: {args.gitf_na_layer}')
     log_args3 = []
 
     base_path_params = [
@@ -397,7 +401,8 @@ if __name__ == '__main__':
     if 'PISA' in init_args.model_name:
         params += ['bound_weight', 'ratio']
     if init_args.model_name == 'LightCCF':
-        params += ['lightccf_tau', 'lightccf_ssl_lambda', 'lightccf_reg_lambda']
+        params += ['lightccf_tau', 'lightccf_ssl_lambda', 'lightccf_reg_lambda',
+                   'gitf_na_layer']
 
     for arg in params:
         log_args3.append(arg + '=' + str(eval('args.' + arg)))
