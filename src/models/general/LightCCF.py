@@ -67,9 +67,15 @@ class LightCCF(Model):
         scores = torch.matmul(cf_u_vectors, cf_i_vectors.t())
         return scores
 
-    def _get_neighbor_aggregate_loss(self, user_vectors, pos_vectors):
+    def _get_neighbor_aggregate_loss(self, user_vectors, pos_vectors, gitf_w=None):
         """InfoNCE-style loss pulling each user toward its positive item
-        while repelling from all other batch pairs and the users themselves."""
+        while repelling from all other batch pairs and the users themselves.
+
+        GI stream weights, following Model.loss:
+        - 'margin' / 'margin_both': weight the score ratio pos_score/total_score
+          inside the log by the positive-item weight;
+        - 'example': weight the per-example output loss by the positive-item weight.
+        """
         u_vectors = F.normalize(user_vectors, dim=-1)
         p_vectors = F.normalize(pos_vectors, dim=-1)
         pos_score = torch.exp((u_vectors * p_vectors).sum(dim=-1) / self.lightccf_tau)
@@ -79,7 +85,18 @@ class LightCCF(Model):
         )
         total_score = torch.exp(total_score / self.lightccf_tau).sum(dim=1)
         # 10e-6 == 1e-5, matching the original implementation
-        return -torch.log(pos_score / total_score + 10e-6)
+        if gitf_w is None or self.gitf_weight_mode == 'example':
+            na_loss = -torch.log(pos_score / total_score + 10e-6)
+            if gitf_w is not None:
+                na_loss = na_loss * gitf_w.reshape(-1, 1)
+        else:
+            # 'margin' / 'margin_both': weight the score ratio inside the log
+            if self.gitf_weight_mode == 'margin_both':
+                weights = gitf_w[:, :1]
+            else:
+                weights = gitf_w.reshape(-1, 1)
+            na_loss = -torch.log(pos_score / total_score * weights + 10e-6)
+        return na_loss
 
     def _get_reg_loss(self, user_vectors, pos_vectors, neg_vectors):
         """L2 regularization over the batch's raw embeddings (original formula)."""
@@ -102,7 +119,7 @@ class LightCCF(Model):
         p_vectors = all_items[pos_ids]
         n_vectors = all_items[neg_ids.reshape(-1)]
 
-        na_loss = self._get_neighbor_aggregate_loss(u_vectors, p_vectors)
+        na_loss = self._get_neighbor_aggregate_loss(u_vectors, p_vectors, gitf_w)
         if reduction == 'mean':
             na_loss = na_loss.mean()
         reg_loss = self._get_reg_loss(u_vectors, p_vectors, n_vectors)
